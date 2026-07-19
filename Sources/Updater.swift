@@ -1,9 +1,7 @@
 // Updater.swift — self-update against GitHub Releases.
 //
-// The check asks the GitHub API for the latest *tagged* release
-// (/releases/latest already excludes the rolling dev-* pre-releases the CI
-// publishes on every push) and compares its semver against the baked-in
-// appVersion. Applying an update opens a Terminal window running the official
+// The check asks the GitHub API for the latest release and compares its
+// semver against the baked-in appVersion. Applying an update opens a Terminal window running the official
 // curl|bash installer, then quits the app — a running .app can't replace
 // itself; the installer swaps /Applications/HikViewer.app and relaunches.
 // curl-downloaded files don't carry com.apple.quarantine, which is why the

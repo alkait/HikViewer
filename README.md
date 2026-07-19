@@ -22,9 +22,10 @@ SHA-256, and installs a quarantine-free `HikViewer.app` into `/Applications`
 Installed apps update themselves: **HikViewer → Check for Updates…** (also
 checked automatically at launch) re-runs the same installer.
 
-Releases are built by CI (`.github/workflows/release.yml`): every push to
-`main` publishes a `dev-*` pre-release; pushing a `vX.Y.Z` tag publishes the
-stable release that the updater and the command above track.
+Releases are built by CI (`.github/workflows/release.yml`): a plain push to
+`main` only runs a compile check; pushing a `vX.Y.Z` tag publishes the
+release that the updater and the command above track. `./push.sh
+[patch|minor|major]` does the push + tag in one step.
 
 ## Build & run
 

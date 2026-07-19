@@ -2,13 +2,12 @@
 #
 # What it does:
 #   - On every push to main: run ./build.sh (universal arm64+x86_64 binary,
-#     .app bundle, ad-hoc signed), package it, and publish a GitHub
-#     pre-release tagged `dev-<run_number>` so each push gives a clean
-#     download URL.
+#     .app bundle, ad-hoc signed) as a compile check. Nothing is published.
 #   - On every push of a tag matching `v*.*.*` (e.g. `v1.0.0`): the same
-#     build, published as a regular (non-pre-release) release at that tag.
-#     These are what the in-app updater and install.sh track — cut one
-#     whenever you want installed apps to pick up the changes.
+#     build, packaged and published as a release at that tag. These are what
+#     the in-app updater and install.sh track — cut one with
+#     `./push.sh patch|minor|major` whenever you want installed apps to pick
+#     up the changes.
 #
 # What it does NOT do (intentionally):
 #   - Developer-ID signing or notarization. build.sh ad-hoc signs, so
@@ -25,8 +24,8 @@ on:
     branches: [main]
     tags: ['v*.*.*']
 
-# Single in-flight release build per ref. A second push to main while the
-# first is still running cancels the first — the second is strictly newer.
+# Single in-flight build per ref. A second push to main while the first is
+# still running cancels the first — the second is strictly newer.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
@@ -44,9 +43,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Derive a human-readable version string.
+      # Derive the version string.
       #   - tag push    -> the tag itself (e.g. v1.0.0)
-      #   - branch push -> 0.0.0-dev.<run_number>+<short-sha>
+      #   - branch push -> 0.0.0-dev.<run_number>+<short-sha> (compile check
+      #     only; never published)
       # build.sh stamps whatever we pass via VERSION= into
       # Sources/Version.swift and the bundle's Info.plist; the in-app
       # updater treats the 0.0.0-dev core as "local build, never nag".
@@ -71,6 +71,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print" HikViewer.app/Contents/Info.plist
           codesign -d -vv HikViewer.app 2>&1 | grep -E 'Identifier|adhoc|Format'
 
+      # Tag pushes only from here down — branch pushes stop after the
+      # compile check above and publish nothing.
+      #
       # Package the assets users actually download:
       #   - install.sh                      One-line curl|bash installer —
       #     the headline path (no quarantine xattr) and what the in-app
@@ -83,6 +86,7 @@ jobs:
       #   - Stable unversioned aliases so releases/latest/download/<file>
       #     links never go stale.
       - name: Package
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
@@ -105,33 +109,8 @@ jobs:
           cp build/install.sh install.sh
           chmod +x install.sh
 
-      # Branch pushes get a pre-release per push. The in-app updater and
-      # install.sh ignore these (releases/latest only reports stable tags).
-      - name: Publish dev pre-release
-        if: ${{ github.ref == 'refs/heads/main' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          name:       "Dev build ${{ steps.ver.outputs.version }}"
-          tag_name:   "dev-${{ github.run_number }}"
-          prerelease: true
-          body: |
-            Automatically built from commit `${{ github.sha }}` on `main`.
-
-            **Not a stable release.** Useful for testing fresh changes. The
-            in-app updater only tracks tagged releases; to try this build:
-
-            ```
-            HIKVIEWER_ZIP_URL=https://github.com/alkait/hikviewer/releases/download/dev-${{ github.run_number }}/HikViewer-macos-universal.app.zip \
-            /bin/bash -c "$(curl -fsSL https://github.com/alkait/hikviewer/releases/latest/download/install.sh)"
-            ```
-          files: |
-            install.sh
-            HikViewer-macos-universal-*.app.zip
-            HikViewer-macos-universal.app.zip
-            SHA256SUMS
-
-      # Tag pushes get a real release — this is what the in-app updater and
-      # releases/latest/download/ URLs resolve to.
+      # This is what the in-app updater and releases/latest/download/ URLs
+      # resolve to.
       - name: Publish tagged release
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v2

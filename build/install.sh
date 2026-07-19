@@ -23,7 +23,7 @@
 #      are pinned to the same release — defends against the brief CDN window
 #      after a publish where `releases/latest/download/<asset>` can hand out
 #      assets from two adjacent releases. Override with $HIKVIEWER_ZIP_URL to
-#      pin a specific release or a dev pre-release.
+#      pin a specific release.
 #   3. Downloads HikViewer-macos-universal.app.zip into a temp dir.
 #   4. Verifies the SHA-256 against the SHA256SUMS file shipped with the same
 #      release. Skipped only via $HIKVIEWER_SKIP_VERIFY=1.
