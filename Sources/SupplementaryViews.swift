@@ -32,6 +32,9 @@ final class SupplementaryTile: NSView {
     /// Whether a real frame has rendered (main thread) — the keyframe nudge
     /// loop stops retrying once this flips.
     var hasVideo: Bool { videoOnScreen }
+    /// Fired once, on main, when the first frame renders — used to freeze a
+    /// pane added while playback is paused right on the paused frame.
+    var onFirstFrame: (() -> Void)?
 
     /// Which edges a resize drag moves — corners carry two.
     private struct ResizeEdges: OptionSet {
@@ -132,6 +135,8 @@ final class SupplementaryTile: NSView {
                 DispatchQueue.main.async {
                     self.videoOnScreen = true
                     self.placeholderLayer.isHidden = true
+                    self.onFirstFrame?()
+                    self.onFirstFrame = nil
                 }
             }
             if #available(macOS 14.0, *) {

@@ -99,21 +99,24 @@ final class SupplementaryManager {
         persist()
 
         // Same anti-black-screen tricks as the grid (rebuildStreams): paint
-        // the last-known snapshot instantly, refresh it from the camera, and
-        // nudge an immediate IDR — the live tap joins the substream mid-GOP
-        // and drops everything until a keyframe flows past. Playback panes
-        // skip this: a live snapshot would show the wrong point in time, and
-        // their PlaybackStream starts on a keyframe anyway.
-        guard !playbackActive else { return }
+        // the last-known snapshot instantly and refresh it from the camera.
+        // In playback mode the snapshot shows "now" rather than the playback
+        // moment, but a briefly wrong-time frame beats a black box — the
+        // pane's stream replaces it within a second. Dim the fresh one there
+        // (cached: true) so it reads as approximate, like a stale frame.
         let host = camera.host
+        let inPlayback = playbackActive
         if let cached = SnapshotCache.load(host: host) {
             v.setPlaceholder(cached, cached: true)
         }
         ISAPI.snapshot(host: host, channel: channel) { [weak v] data in
             guard let data, let image = NSImage(data: data) else { return }
             SnapshotCache.save(host: host, jpeg: data)
-            DispatchQueue.main.async { v?.setPlaceholder(image, cached: false) }
+            DispatchQueue.main.async { v?.setPlaceholder(image, cached: inPlayback) }
         }
+        // The IDR nudge only helps the live substream tap — playback panes
+        // get their own NVR stream, which starts on a keyframe anyway.
+        guard !inPlayback else { return }
         nudgeKeyFrame(host: host, view: v, attempt: 0)
     }
 
@@ -182,28 +185,47 @@ final class SupplementaryManager {
             pane.stream?.stop()
             pane.stream = nil
         }
-        guard !paused else { return }
-        for pane in panes {
-            guard let ch = client.channelByHost[pane.camera.host] else {
-                pane.view.setNote("no recording")
-                continue
+        if paused {
+            // Frozen panes keep their last frame — but a pane added while
+            // paused has none yet and would sit black. Run its stream just
+            // long enough to render the frame at the paused position, then
+            // stop: the pane freezes in sync with the main view.
+            for pane in panes where !pane.view.hasVideo {
+                startStream(for: pane, position: position, speed: 1,
+                            client: client, freezeAfterFirstFrame: true)
             }
-            pane.view.setNote(nil)
-            let (path, clock) = client.playbackRequest(
-                track: NVRClient.track(forChannel: ch),
-                from: position, to: position.addingTimeInterval(6 * 3600))
-            let s = PlaybackStream(host: client.nvr.host, port: client.nvr.rtspPort,
-                                   user: client.nvr.user, password: client.nvr.password,
-                                   path: path, startClock: clock, scale: speed,
-                                   codec: pane.camera.codec)
-            let view = pane.view
-            s.onSample = { [weak view] sb, sync in view?.enqueue(sb, isSync: sync) }
-            s.onState = { _ in }
-            s.onEnded = { }               // freeze at the end; the main view leads
-            view.resync()
-            pane.stream = s
-            s.start()
+            return
         }
+        for pane in panes {
+            startStream(for: pane, position: position, speed: speed,
+                        client: client, freezeAfterFirstFrame: false)
+        }
+    }
+
+    private func startStream(for pane: Pane, position: Date, speed: Int,
+                             client: NVRClient, freezeAfterFirstFrame: Bool) {
+        guard let ch = client.channelByHost[pane.camera.host] else {
+            pane.view.setNote("no recording")
+            return
+        }
+        pane.view.setNote(nil)
+        let (path, clock) = client.playbackRequest(
+            track: NVRClient.track(forChannel: ch),
+            from: position, to: position.addingTimeInterval(6 * 3600))
+        let s = PlaybackStream(host: client.nvr.host, port: client.nvr.rtspPort,
+                               user: client.nvr.user, password: client.nvr.password,
+                               path: path, startClock: clock, scale: speed,
+                               codec: pane.camera.codec)
+        let view = pane.view
+        s.onSample = { [weak view] sb, sync in view?.enqueue(sb, isSync: sync) }
+        s.onState = { _ in }
+        s.onEnded = { }               // freeze at the end; the main view leads
+        // Clear (or arm) the one-shot: a stale freeze closure from a
+        // paused-add must not survive into a normal playing stream.
+        view.onFirstFrame = freezeAfterFirstFrame ? { [weak s] in s?.stop() } : nil
+        view.resync()
+        pane.stream = s
+        s.start()
     }
 
     /// Main view returned to live — panes follow the substream tap again.
