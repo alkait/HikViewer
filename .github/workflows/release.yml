@@ -1,0 +1,166 @@
+# Release workflow — same pattern as alkait/WhatsKept.
+#
+# What it does:
+#   - On every push to main: run ./build.sh (universal arm64+x86_64 binary,
+#     .app bundle, ad-hoc signed), package it, and publish a GitHub
+#     pre-release tagged `dev-<run_number>` so each push gives a clean
+#     download URL.
+#   - On every push of a tag matching `v*.*.*` (e.g. `v1.0.0`): the same
+#     build, published as a regular (non-pre-release) release at that tag.
+#     These are what the in-app updater and install.sh track — cut one
+#     whenever you want installed apps to pick up the changes.
+#
+# What it does NOT do (intentionally):
+#   - Developer-ID signing or notarization. build.sh ad-hoc signs, so
+#     browser-downloaded copies trip Gatekeeper; install.sh (curl|bash) is
+#     the supported install path because curl'd files carry no quarantine
+#     xattr.
+#
+# Required secrets: none.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+# Single in-flight release build per ref. A second push to main while the
+# first is still running cancels the first — the second is strictly newer.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # required to create releases + upload assets
+
+jobs:
+  build:
+    name: macOS universal
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Derive a human-readable version string.
+      #   - tag push    -> the tag itself (e.g. v1.0.0)
+      #   - branch push -> 0.0.0-dev.<run_number>+<short-sha>
+      # build.sh stamps whatever we pass via VERSION= into
+      # Sources/Version.swift and the bundle's Info.plist; the in-app
+      # updater treats the 0.0.0-dev core as "local build, never nag".
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/}"
+          else
+            sha="${GITHUB_SHA::7}"
+            v="0.0.0-dev.${GITHUB_RUN_NUMBER}+${sha}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building version: $v"
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ./build.sh
+          lipo -info hikviewer
+          /usr/libexec/PlistBuddy -c "Print" HikViewer.app/Contents/Info.plist
+          codesign -d -vv HikViewer.app 2>&1 | grep -E 'Identifier|adhoc|Format'
+
+      # Package the assets users actually download:
+      #   - install.sh                      One-line curl|bash installer —
+      #     the headline path (no quarantine xattr) and what the in-app
+      #     updater runs. Verifies the zip against SHA256SUMS.
+      #   - HikViewer-macos-universal-<ver>.app.zip  Browser download:
+      #     versioned folder holding HikViewer.app + an `Install
+      #     HikViewer.command` helper that strips quarantine. ditto
+      #     preserves codesign metadata; plain `zip -r` corrupts the
+      #     bundle's signature.
+      #   - Stable unversioned aliases so releases/latest/download/<file>
+      #     links never go stale.
+      - name: Package
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          STAGE="HikViewer-macos-universal-${VERSION}"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          ditto HikViewer.app "$STAGE/HikViewer.app"
+          cp build/install-helper.command "$STAGE/Install HikViewer.command"
+          chmod +x "$STAGE/Install HikViewer.command"
+          ditto -c -k --keepParent "$STAGE" "HikViewer-macos-universal-${VERSION}.app.zip"
+
+          cp "HikViewer-macos-universal-${VERSION}.app.zip" "HikViewer-macos-universal.app.zip"
+
+          # SHA256SUMS covers the zips only — install.sh fetches SHA256SUMS
+          # at runtime and looks up its download there; it must not try to
+          # verify itself.
+          ls -lh *.zip
+          shasum -a 256 *.zip | tee SHA256SUMS
+
+          cp build/install.sh install.sh
+          chmod +x install.sh
+
+      # Branch pushes get a pre-release per push. The in-app updater and
+      # install.sh ignore these (releases/latest only reports stable tags).
+      - name: Publish dev pre-release
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name:       "Dev build ${{ steps.ver.outputs.version }}"
+          tag_name:   "dev-${{ github.run_number }}"
+          prerelease: true
+          body: |
+            Automatically built from commit `${{ github.sha }}` on `main`.
+
+            **Not a stable release.** Useful for testing fresh changes. The
+            in-app updater only tracks tagged releases; to try this build:
+
+            ```
+            HIKVIEWER_ZIP_URL=https://github.com/alkait/hikviewer/releases/download/dev-${{ github.run_number }}/HikViewer-macos-universal.app.zip \
+            /bin/bash -c "$(curl -fsSL https://github.com/alkait/hikviewer/releases/latest/download/install.sh)"
+            ```
+          files: |
+            install.sh
+            HikViewer-macos-universal-*.app.zip
+            HikViewer-macos-universal.app.zip
+            SHA256SUMS
+
+      # Tag pushes get a real release — this is what the in-app updater and
+      # releases/latest/download/ URLs resolve to.
+      - name: Publish tagged release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name:       "HikViewer ${{ steps.ver.outputs.version }}"
+          tag_name:   ${{ github.ref_name }}
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            macOS universal (Apple Silicon + Intel). Needs `ffmpeg` on PATH
+            (`brew install ffmpeg`).
+
+            **Recommended — one Terminal command, zero Gatekeeper friction:**
+
+            ```
+            /bin/bash -c "$(curl -fsSL https://github.com/alkait/hikviewer/releases/latest/download/install.sh)"
+            ```
+
+            `curl`-downloaded files don't carry the `com.apple.quarantine`
+            xattr that browsers attach, so the installer can drop a
+            quarantine-free `HikViewer.app` into `/Applications` without
+            tripping the "HikViewer is damaged" dialog. Installed apps can
+            update themselves via **HikViewer → Check for Updates…**.
+
+            **Browser download:** `HikViewer-macos-universal-*.app.zip` —
+            unzip, then double-click `Install HikViewer.command` inside the
+            unzipped folder (right-click → Open the first time).
+          files: |
+            install.sh
+            HikViewer-macos-universal-*.app.zip
+            HikViewer-macos-universal.app.zip
+            SHA256SUMS

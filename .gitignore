@@ -1,0 +1,13 @@
+# compiled viewer binary
+hikviewer
+.build/
+
+# captured media
+*.jpg
+*.mp4
+
+# app bundle
+HikViewer.app/
+
+# macOS
+.DS_Store
