@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "HikViewer"
+        window.appearance = NSAppearance(named: .darkAqua)   // dark title bar over the video grid
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 640, height: 300)
         window.contentView = grid
@@ -79,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(grid)
+        if Settings.startFullScreen { window.toggleFullScreen(nil) }
         NSApp.activate(ignoringOtherApps: true)
 
         if Settings.isConfigured && !Settings.cameras.isEmpty {

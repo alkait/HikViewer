@@ -105,6 +105,13 @@ enum Settings {
     static var isConfigured: Bool {
         cache.cameras.contains { !$0.host.isEmpty && !$0.user.isEmpty && !$0.password.isEmpty }
     }
+
+    /// UI preference, not part of the camera config — lives in UserDefaults
+    /// (like the window-frame autosave) so exports stay cameras-only.
+    static var startFullScreen: Bool {
+        get { UserDefaults.standard.object(forKey: "startFullScreen") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "startFullScreen") }
+    }
 }
 
 // MARK: - Shared helpers
