@@ -137,6 +137,29 @@ click-drag pans, a `2.4× ✕` badge (top-right) shows the level — click it to
 reset — and `Esc` zooms out first before leaving the view. Zoom survives
 switching between live and playback on the same camera.
 
+### Snapshots & clips (focused view)
+
+Both prompt with a save panel — Desktop as the default folder, a
+ready-made name (`Camera 2026-07-20 14.32.05.jpg/.mp4`, footage time for
+playback, clock time for live) preselected so you can just type over it or
+hit Return — plus a **"Reveal in Finder"** checkbox whose setting is
+remembered.
+
+**`S`** saves a still; the frame is captured the instant you press `S`
+(shutter flash), not when you finish naming it. Live grabs the camera's
+full-resolution snapshot; in playback it pulls the frame at the current
+timeline position from the NVR (takes a few seconds — works while paused,
+so scrub to the moment and press `S`).
+
+**`R`** starts/stops recording a clip; recording starts the instant you
+press `R` (red `● REC` badge with elapsed time), and the naming panel
+appears when you stop — Cancel discards the clip. Live records the main
+stream; in playback it records forward from where you pressed `R` at 1×,
+unaffected by pausing or seeking while it runs. Clips are stream-copied (no
+re-encode, video only) into MP4; recording also stops when you leave the
+camera, and quitting mid-recording auto-saves the clip to the Desktop under
+its default name. Both are also in the File menu (`⌘S` / `⌘R`).
+
 ### Supplementary panes (focused view)
 
 Press **`+`** for a selector panel — a thumbnail grid of the other cameras;
@@ -168,6 +191,7 @@ running underneath, so `Esc` back to live is instant.
 | `←` / `→` | seek ±10 s (`Shift`: ±60 s, `Cmd`: ±15 min) |
 | `0`–`9` | jump to that tenth of the footage in view (YouTube style) |
 | `X` | cycle speed 1× / 2× / 4× |
+| `S` / `R` | snapshot / record clip at this position (→ Desktop) |
 | `N` / `Shift-N` | next / previous motion block |
 | `C` | calendar |
 | `P` or `Esc` | back to live |

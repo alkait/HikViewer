@@ -28,6 +28,8 @@ enum HelpContext {
         case .camera: return [
             ("P", "recorded playback"),
             ("+", "add a supplementary pane"),
+            ("S", "snapshot → Desktop"),
+            ("R", "record clip → Desktop"),
             ("2×click", "quick 2× zoom"),
             ("pinch", "zoom · scroll or drag pans"),
             ("2×click pane", "open that camera"),
@@ -40,6 +42,8 @@ enum HelpContext {
             ("X", "speed 1× → 2× → 4×"),
             ("N / ⇧N", "next / previous motion"),
             ("C", "calendar"),
+            ("S", "snapshot at this position"),
+            ("R", "record clip from here"),
             ("+", "add a supplementary pane"),
             ("scroll", "timeline zoom · pan"),
             ("P / Esc", "back to live"),

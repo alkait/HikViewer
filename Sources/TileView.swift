@@ -13,6 +13,7 @@ final class TileView: NSView {
 
     private let placeholderLayer = CALayer()
     private let cachedBadge = NSTextField(labelWithString: "cached")
+    private let recBadge = NSTextField(labelWithString: "")
     private var videoOnScreen = false  // main thread
 
     /// Fires after each layout pass — the supplementary manager rescales its
@@ -74,6 +75,12 @@ final class TileView: NSView {
         cachedBadge.isHidden = true
         addSubview(cachedBadge)
 
+        recBadge.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        recBadge.drawsBackground = true
+        recBadge.backgroundColor = NSColor.black.withAlphaComponent(0.55)
+        recBadge.isHidden = true
+        addSubview(recBadge)
+
         zoomBadge.isBordered = false
         zoomBadge.wantsLayer = true
         zoomBadge.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
@@ -109,6 +116,42 @@ final class TileView: NSView {
         }
         placeholderLayer.opacity = cached ? 0.75 : 1.0
         cachedBadge.isHidden = !cached
+    }
+
+    /// Clip-recording badge ("0:42"); nil hides it.
+    func setRecording(_ elapsed: String?) {
+        guard let elapsed else { recBadge.isHidden = true; return }
+        let s = NSMutableAttributedString(string: " ● ", attributes: [
+            .foregroundColor: NSColor.systemRed,
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+        ])
+        s.append(NSAttributedString(string: "REC \(elapsed) ", attributes: [
+            .foregroundColor: NSColor.white,
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
+        ]))
+        recBadge.attributedStringValue = s
+        recBadge.sizeToFit()
+        recBadge.isHidden = false
+        needsLayout = true
+    }
+
+    /// Camera-shutter flash for snapshots.
+    func flash() {
+        guard let layer else { return }
+        let f = CALayer()
+        f.backgroundColor = NSColor.white.cgColor
+        f.frame = bounds
+        f.zPosition = 10
+        f.opacity = 0
+        layer.addSublayer(f)
+        let anim = CABasicAnimation(keyPath: "opacity")
+        anim.fromValue = 0.7
+        anim.toValue = 0
+        anim.duration = 0.35
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { f.removeFromSuperlayer() }
+        f.add(anim, forKey: "flash")
+        CATransaction.commit()
     }
 
     private func noteVideoStarted() {
@@ -220,6 +263,10 @@ final class TileView: NSView {
         cachedBadge.frame.origin = NSPoint(x: bounds.width - cachedBadge.frame.width - 6, y: 6)
         zoomBadge.frame.origin = NSPoint(x: bounds.width - zoomBadge.frame.width - 6,
                                          y: bounds.height - zoomBadge.frame.height - 6)
+        // REC sits top-right, sliding left of the zoom badge when it's shown.
+        var recX = bounds.width - recBadge.frame.width - 6
+        if !zoomBadge.isHidden { recX -= zoomBadge.frame.width + 6 }
+        recBadge.frame.origin = NSPoint(x: recX, y: bounds.height - recBadge.frame.height - 6)
         onLayoutChange?()
     }
 

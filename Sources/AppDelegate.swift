@@ -22,6 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var promotedOrigin: (index: Int, wasPlayback: Bool, position: Date?)?
     private var selector: SupplementarySelector?
     private var helpView: ShortcutHelpView?
+    /// In-flight clip recording (R); at most one, tied to the camera it
+    /// started on — leaving that camera stops it.
+    private var recorder: ClipRecorder?
+    private var recTimer: Timer?
+    private weak var recTile: TileView?
+    private var recHost: String?
+    /// Suggested filename for the in-flight recording; a quit mid-recording
+    /// auto-saves under it (no panel can be shown while terminating).
+    private var recDefaultName: String?
     /// Host of the currently focused camera — focusChanged needs to know
     /// which view it is leaving to record that view's state.
     private var focusedHost: String?
@@ -154,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Tear down every pipe and rebuild the grid from the current Settings.
     /// Called on launch and again whenever Settings are saved.
     func rebuildStreams() {
+        stopRecording()
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
         closeHelp()
@@ -257,6 +267,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 $0.cameraHost = host
             }
         }
+        // A recording follows its camera across live<->playback but not away
+        // from it — leaving the camera stops (and opens) the clip.
+        if recorder != nil, host != recHost { stopRecording() }
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
         // Panes survive playback exits on the same camera; any other focus
@@ -363,6 +376,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case " ": pb.togglePause(); return true
             case "c": pb.toggleCalendar(); return true
             case "x": pb.cycleSpeed(); return true
+            case "s": saveSnapshot(); return true
+            case "r": toggleRecording(); return true
             case "n":
                 if e.modifierFlags.contains(.shift) { pb.jumpToPreviousMotion() }
                 else { pb.jumpToNextMotion() }
@@ -370,6 +385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "p": exitPlayback(); return true
             default: return false
             }
+        }
+        if grid.focused != nil, let ch = e.charactersIgnoringModifiers?.lowercased() {
+            if ch == "s" { saveSnapshot(); return true }
+            if ch == "r" { toggleRecording(); return true }
         }
         if e.charactersIgnoringModifiers?.lowercased() == "p", grid.focused != nil {
             // Resume from the camera's remembered position, not "a minute ago".
@@ -566,6 +585,155 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(grid)
     }
 
+    // MARK: snapshots & clips (S / R, saved to the Desktop and opened)
+
+    @objc func saveSnapshotMenu(_ sender: Any?) { saveSnapshot() }
+
+    @objc func toggleRecordingMenu(_ sender: Any?) { toggleRecording() }
+
+    /// S: still of the focused camera — live grabs the camera's full-res
+    /// ISAPI picture; playback pulls one decoded frame at the current
+    /// position from the NVR (takes a few seconds). The capture starts into
+    /// a temp file the moment S is pressed, in parallel with the save panel,
+    /// so naming the file doesn't shift the captured moment.
+    private func saveSnapshot() {
+        guard let i = grid.focused, i < streams.count, i < grid.tiles.count else {
+            NSSound.beep()
+            return
+        }
+        let cam = streams[i].camera
+        let tile = grid.tiles[i]
+        tile.flash()             // the shutter flash marks the captured moment
+        let temp = MediaSaver.tempURL(ext: "jpg")
+
+        var captureOK: Bool?
+        var chosen: URL?
+        var panelClosed = false
+        // Runs when both the capture and the panel are done, in either order.
+        let finish: () -> Void = { [weak tile] in
+            guard panelClosed, let ok = captureOK else { return }
+            defer { try? FileManager.default.removeItem(at: temp) }
+            guard let dest = chosen else { tile?.setStatus(""); return }   // cancelled
+            guard ok else { tile?.setStatus("snapshot failed"); return }
+            try? FileManager.default.removeItem(at: dest)   // replace confirmed by the panel
+            do {
+                try FileManager.default.moveItem(at: temp, to: dest)
+                tile?.setStatus("")
+                MediaSaver.reveal(dest)
+            } catch { tile?.setStatus("snapshot failed") }
+        }
+
+        let name: String
+        if let pb = playback, let client = nvrClient, let ch = client.channelByHost[cam.host] {
+            let pos = pb.currentPosition
+            name = MediaSaver.defaultName(camera: cam.name, date: pos,
+                                          timeZone: client.timeZone, ext: "jpg")
+            MediaSaver.capturePlaybackSnapshot(camera: cam, client: client,
+                                               track: NVRClient.track(forChannel: ch),
+                                               position: pos, to: temp) { ok in
+                captureOK = ok
+                finish()
+            }
+        } else {
+            name = MediaSaver.defaultName(camera: cam.name, date: Date(), timeZone: nil, ext: "jpg")
+            MediaSaver.captureLiveSnapshot(camera: cam, to: temp) { ok in
+                captureOK = ok
+                finish()
+            }
+        }
+        MediaSaver.promptForSave(defaultName: name, type: .jpeg, window: window) { [weak tile] url in
+            panelClosed = true
+            chosen = url
+            if url != nil, captureOK == nil { tile?.setStatus("saving snapshot…") }
+            finish()
+        }
+    }
+
+    /// R: toggle clip recording of the focused camera. Recording starts the
+    /// moment R is pressed, into a temp file; the save panel appears when it
+    /// stops (Cancel discards the clip). Live records the main stream;
+    /// playback records from the current position at 1×, unaffected by
+    /// pausing/seeking while it runs.
+    private func toggleRecording() {
+        if recorder != nil {
+            stopRecording()
+            return
+        }
+        guard let i = grid.focused, i < streams.count, i < grid.tiles.count else {
+            NSSound.beep()
+            return
+        }
+        let cam = streams[i].camera
+        let tile = grid.tiles[i]
+        let input: String
+        let stamp: Date
+        let tz: TimeZone?
+        if let pb = playback, let client = nvrClient, let ch = client.channelByHost[cam.host] {
+            let pos = pb.currentPosition
+            let (path, _) = client.playbackRequest(track: NVRClient.track(forChannel: ch),
+                                                   from: pos, to: pos.addingTimeInterval(6 * 3600))
+            input = MediaSaver.playbackURL(client: client, path: path)
+            stamp = pos
+            tz = client.timeZone
+        } else {
+            input = rtspURL(camera: cam, channel: mainChannel)
+            stamp = Date()
+            tz = nil
+        }
+        let name = MediaSaver.defaultName(camera: cam.name, date: stamp, timeZone: tz, ext: "mp4")
+        let temp = MediaSaver.tempURL(ext: "mp4")
+        guard let rec = ClipRecorder(inputURL: input, codec: cam.codec, fileURL: temp), rec.start() else {
+            tile.setStatus("recording failed to start")
+            return
+        }
+        recDefaultName = name
+        rec.onFinish = { [weak self, weak tile] ok in
+            guard let self else { return }
+            self.recTimer?.invalidate()
+            self.recTimer = nil
+            tile?.setRecording(nil)
+            if ok { self.promptToKeepClip(rec.fileURL, defaultName: name) }
+            else { tile?.setStatus("recording failed") }
+            if self.recorder === rec {
+                self.recorder = nil
+                self.recTile = nil
+                self.recHost = nil
+                self.recDefaultName = nil
+            }
+        }
+        recorder = rec
+        recTile = tile
+        recHost = cam.host
+        tile.setRecording("0:00")
+        recTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, let rec = self.recorder else { return }
+            let s = Int(Date().timeIntervalSince(rec.startedAt))
+            self.recTile?.setRecording(String(format: "%d:%02d", s / 60, s % 60))
+        }
+    }
+
+    /// The recording finished — let the user name/place it, or discard.
+    private func promptToKeepClip(_ temp: URL, defaultName: String) {
+        MediaSaver.promptForSave(defaultName: defaultName, type: .mpeg4Movie, window: window) { url in
+            guard let url else {
+                try? FileManager.default.removeItem(at: temp)   // cancelled: discard
+                return
+            }
+            try? FileManager.default.removeItem(at: url)        // replace confirmed by the panel
+            do {
+                try FileManager.default.moveItem(at: temp, to: url)
+                MediaSaver.reveal(url)
+            } catch {
+                try? FileManager.default.removeItem(at: temp)
+                NSSound.beep()
+            }
+        }
+    }
+
+    private func stopRecording() {
+        recorder?.stop()         // onFinish does the cleanup when ffmpeg exits
+    }
+
     /// The translucent back arrow shows only when Esc's next action would
     /// leave the promoted view (not zoomed, not in playback).
     private func updateBackArrow() {
@@ -585,6 +753,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SessionStore.update { $0.location = .camera; $0.cameraHost = host }
             } else {
                 SessionStore.update { $0.location = .grid; $0.cameraHost = nil }
+            }
+        }
+        // A recording still running at quit is finalized and auto-saved to
+        // the Desktop under its default name — no save panel mid-terminate.
+        if let rec = recorder {
+            rec.onFinish = nil
+            rec.stopAndWait()
+            if (MediaSaver.fileSize(rec.fileURL) ?? 0) > 4096 {
+                let dest = MediaSaver.uniqueDesktopURL(name: recDefaultName ?? rec.fileURL.lastPathComponent)
+                try? FileManager.default.moveItem(at: rec.fileURL, to: dest)
+            } else {
+                try? FileManager.default.removeItem(at: rec.fileURL)
             }
         }
         playback?.exit()

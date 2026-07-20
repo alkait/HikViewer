@@ -73,6 +73,13 @@ let importItem = NSMenuItem(title: "Import Cameras…", action: #selector(AppDel
 importItem.target = delegate
 fileMenu.addItem(exportItem)
 fileMenu.addItem(importItem)
+fileMenu.addItem(.separator())
+let snapshotItem = NSMenuItem(title: "Save Snapshot", action: #selector(AppDelegate.saveSnapshotMenu(_:)), keyEquivalent: "s")
+snapshotItem.target = delegate
+let recordItem = NSMenuItem(title: "Start/Stop Recording", action: #selector(AppDelegate.toggleRecordingMenu(_:)), keyEquivalent: "r")
+recordItem.target = delegate
+fileMenu.addItem(snapshotItem)
+fileMenu.addItem(recordItem)
 fileMenuItem.submenu = fileMenu
 
 app.mainMenu = mainMenu
