@@ -361,6 +361,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openSupplementarySelector()
             return true
         }
+        // - closes panes, most recently added first.
+        if grid.focused != nil, let ch = e.charactersIgnoringModifiers, ch == "-" || ch == "_" {
+            if supp.count > 0 { supp.removeLastPane() } else { NSSound.beep() }
+            return true
+        }
         if let pb = playback {
             switch e.specialKey {
             case .leftArrow: pb.step(-arrowSkip(e)); return true

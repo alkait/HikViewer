@@ -140,6 +140,12 @@ final class SupplementaryManager {
         }
     }
 
+    /// "-" — close the most recently added pane.
+    func removeLastPane() {
+        guard let last = panes.last else { return }
+        removePane(view: last.view)
+    }
+
     private func removePane(view: SupplementaryTile) {
         guard let i = panes.firstIndex(where: { $0.view === view }) else { return }
         panes[i].stream?.stop()

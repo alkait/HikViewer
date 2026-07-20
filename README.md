@@ -165,7 +165,7 @@ its default name. Both are also in the File menu (`⌘S` / `⌘R`).
 Press **`+`** for a selector panel — a thumbnail grid of the other cameras;
 type to filter, `Return` picks the top match, `Esc`/click-outside closes. Up
 to **4 floating panes**: drag to move, resize from any edge or corner, `✕` to
-close. Panes show live video while the main view is live (tapping the
+close (`-` closes panes, most recently added first). Panes show live video while the main view is live (tapping the
 already-running grid substreams — zero extra sessions), and playback **synced
 to the main view's position and speed** while it's in playback. Double-click
 a pane to open that camera as the main view at the same moment; the back
