@@ -192,10 +192,18 @@ running underneath, so `Esc` back to live is instant.
 | `0`–`9` | jump to that tenth of the footage in view (YouTube style) |
 | `X` | cycle speed 1× / 2× / 4× |
 | `S` / `R` | snapshot / record clip at this position (→ Desktop) |
+| `B` | bookmark this moment (pauses, asks for an optional name) |
+| `Shift-B` | bookmark list — jump to / delete saved moments |
 | `N` / `Shift-N` | next / previous motion block |
 | `C` | calendar |
 | `P` or `Esc` | back to live |
 
+- **Bookmarks:** `B` saves the current moment (playback pauses first; the
+  name is optional — camera and time are always kept). Bookmarked moments
+  show as amber pins on the timeline — click one to jump exactly to it.
+  `Shift-B` opens the bookmark list from anywhere (grid or camera view):
+  type to filter, arrows + `Return` (or click) jumps straight into playback
+  at that moment, `⌫` deletes the selected bookmark after confirmation.
 - **Timeline zoom:** the zoom button cycles 24h → 6h → 1h → 10m, or
   scroll/pinch on the strip; two-finger scroll pans, and the window follows
   the playhead while playing.

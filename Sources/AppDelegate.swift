@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var promotedOrigin: (index: Int, wasPlayback: Bool, position: Date?)?
     private var selector: SupplementarySelector?
     private var helpView: ShortcutHelpView?
+    private var bookmarkPrompt: BookmarkNamePrompt?
+    private var bookmarkPane: BookmarkListPane?
     /// In-flight clip recording (R); at most one, tied to the camera it
     /// started on — leaving that camera stops it.
     private var recorder: ClipRecorder?
@@ -167,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
         closeHelp()
+        closeBookmarkUI()
         supp.teardown()
         promotedOrigin = nil
         nvrClient = nil      // pick up NVR credential changes lazily
@@ -272,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if recorder != nil, host != recHost { stopRecording() }
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
+        closeBookmarkUI()
         // Panes survive playback exits on the same camera; any other focus
         // change tears them down (their layout is saved for restore).
         if supp.attachedHost != host { supp.teardown() }
@@ -356,6 +360,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             toggleHelp()
             return true
         }
+        // Shift-B: the bookmark pane, from any context. Checked before the
+        // playback block so plain B stays "add bookmark" there.
+        if e.charactersIgnoringModifiers?.lowercased() == "b", e.modifierFlags.contains(.shift) {
+            toggleBookmarkPane()
+            return true
+        }
         // + on a focused view: add a supplementary pane (selector panel).
         if grid.focused != nil, let ch = e.charactersIgnoringModifiers, ch == "+" || ch == "=" {
             openSupplementarySelector()
@@ -383,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "x": pb.cycleSpeed(); return true
             case "s": saveSnapshot(); return true
             case "r": toggleRecording(); return true
+            case "b": promptBookmark(pb); return true
             case "n":
                 if e.modifierFlags.contains(.shift) { pb.jumpToPreviousMotion() }
                 else { pb.jumpToNextMotion() }
@@ -588,6 +599,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         v.removeFromSuperview()
         helpView = nil
         window.makeFirstResponder(grid)
+    }
+
+    // MARK: bookmarks (B adds in playback, Shift-B lists everywhere)
+
+    /// B in playback: pause (a bookmark is a precise moment), then ask for an
+    /// optional name over the focused tile.
+    private func promptBookmark(_ pb: PlaybackController) {
+        guard bookmarkPrompt == nil, bookmarkPane == nil,
+              let i = grid.focused, i < streams.count, i < grid.tiles.count else { return }
+        if !pb.isPaused { pb.togglePause() }
+        let cam = streams[i].camera
+        let pos = pb.currentPosition
+        let tz = nvrClient?.timeZone ?? .current
+        let prompt = BookmarkNamePrompt(subtitle: "\(cam.name) · \(BookmarkStore.rowFormatter(tz).string(from: pos))")
+        prompt.onSave = { [weak self] label in
+            BookmarkStore.add(Bookmark(id: UUID(), host: cam.host, cameraName: cam.name,
+                                       time: pos, label: label, created: Date()))
+            self?.playback?.refreshBookmarks()
+            self?.closeBookmarkUI()
+        }
+        prompt.onCancel = { [weak self] in self?.closeBookmarkUI() }
+        let tile = grid.tiles[i]
+        prompt.frame = tile.bounds
+        prompt.autoresizingMask = [.width, .height]
+        tile.addSubview(prompt)
+        bookmarkPrompt = prompt
+        prompt.focus(in: window)
+    }
+
+    private func toggleBookmarkPane() {
+        if bookmarkPane != nil { closeBookmarkUI(); return }
+        guard bookmarkPrompt == nil else { return }
+        closeHelp()
+        let pane = BookmarkListPane(timeZone: nvrClient?.timeZone ?? .current)
+        pane.onClose = { [weak self] in self?.closeBookmarkUI() }
+        pane.onPick = { [weak self] b in self?.jumpToBookmark(b) }
+        pane.onChanged = { [weak self] in self?.playback?.refreshBookmarks() }
+        pane.frame = grid.bounds
+        pane.autoresizingMask = [.width, .height]
+        grid.addSubview(pane)
+        bookmarkPane = pane
+        window.makeFirstResponder(pane)
+    }
+
+    private func closeBookmarkUI() {
+        guard bookmarkPrompt != nil || bookmarkPane != nil else { return }
+        bookmarkPrompt?.removeFromSuperview()
+        bookmarkPrompt = nil
+        bookmarkPane?.removeFromSuperview()
+        bookmarkPane = nil
+        window.makeFirstResponder(grid)
+    }
+
+    /// Open the bookmark's camera in playback at its moment — the same
+    /// programmatic navigation the promote/back flows use.
+    private func jumpToBookmark(_ b: Bookmark) {
+        closeBookmarkUI()
+        guard let target = streams.firstIndex(where: { $0.camera.host == b.host }) else {
+            NSSound.beep()      // camera no longer configured
+            return
+        }
+        if grid.focused == target {
+            if let pb = playback { pb.seek(to: b.time) } else { enterPlayback(startAt: b.time) }
+            return
+        }
+        promotedOrigin = nil
+        programmaticNav = true
+        grid.focused = target
+        programmaticNav = false
+        SessionStore.update { $0.location = .camera; $0.cameraHost = b.host }
+        enterPlayback(startAt: b.time)
     }
 
     // MARK: snapshots & clips (S / R, saved to the Desktop and opened)

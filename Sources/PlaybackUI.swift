@@ -24,6 +24,7 @@ final class TimelineStrip: NSView {
     }
     var segments: [RecordingSegment] = [] { didSet { needsDisplay = true } }
     var motion: [RecordingSegment] = [] { didSet { needsDisplay = true } }
+    var bookmarks: [Date] = [] { didSet { needsDisplay = true } }
     var cursor: Date? { didSet { needsDisplay = true } }
     var onSeek: ((Date) -> Void)?
 
@@ -139,6 +140,23 @@ final class TimelineStrip: NSView {
             s.draw(at: NSPoint(x: lx, y: bounds.height - sz.height - 0.5), withAttributes: attrs)
         }
 
+        // Bookmark pins: amber line with a diamond head at the top of the band.
+        let amber = NSColor(calibratedRed: 1.0, green: 0.75, blue: 0.2, alpha: 1)
+        for b in bookmarks where b >= winStart && b <= winEnd {
+            let bx = min(max(1, x(for: b)), bounds.width - 1)
+            amber.withAlphaComponent(0.8).setFill()
+            NSRect(x: bx - 0.75, y: bandY, width: 1.5, height: bandH).fill()
+            let d: CGFloat = 3.5
+            let head = NSBezierPath()
+            head.move(to: NSPoint(x: bx, y: bandY + bandH))
+            head.line(to: NSPoint(x: bx - d, y: bandY + bandH - d))
+            head.line(to: NSPoint(x: bx, y: bandY + bandH - 2 * d))
+            head.line(to: NSPoint(x: bx + d, y: bandY + bandH - d))
+            head.close()
+            amber.setFill()
+            head.fill()
+        }
+
         // "Now" marker (red, like the icon's live dot) when it's in view.
         let now = Date()
         if now >= winStart, now < winEnd {
@@ -155,7 +173,18 @@ final class TimelineStrip: NSView {
 
     override func mouseDown(with e: NSEvent) { cursor = date(at: convert(e.locationInWindow, from: nil)) }
     override func mouseDragged(with e: NSEvent) { cursor = date(at: convert(e.locationInWindow, from: nil)) }
-    override func mouseUp(with e: NSEvent) { onSeek?(date(at: convert(e.locationInWindow, from: nil))) }
+
+    /// A click landing within a few pixels of a bookmark pin snaps exactly
+    /// onto it; anywhere else seeks the clicked time as before.
+    override func mouseUp(with e: NSEvent) {
+        let p = convert(e.locationInWindow, from: nil)
+        if let near = bookmarks.min(by: { abs(x(for: $0) - p.x) < abs(x(for: $1) - p.x) }),
+           abs(x(for: near) - p.x) <= 4 {
+            onSeek?(near)
+            return
+        }
+        onSeek?(date(at: p))
+    }
 
     override func scrollWheel(with e: NSEvent) {
         let dx = e.scrollingDeltaX, dy = e.scrollingDeltaY
@@ -428,6 +457,10 @@ final class PlaybackBarView: NSView {
 
     func setMotion(_ spans: [RecordingSegment]) {
         strip.motion = spans
+    }
+
+    func setBookmarks(_ dates: [Date]) {
+        strip.bookmarks = dates
     }
 
     func setMotionFilter(human: Bool, vehicle: Bool) {

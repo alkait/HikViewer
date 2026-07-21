@@ -110,6 +110,7 @@ final class PlaybackController {
         requestedStart = start
         resetZoom()
         bar.setDay(dayFmt.string(from: day))
+        refreshBookmarks()
         bar.setLoading(true)
         fetchSegments { [weak self] in self?.startPlayback(at: start) }
 
@@ -129,6 +130,7 @@ final class PlaybackController {
             day = cal.startOfDay(for: t)
             resetZoom()
             bar.setDay(dayFmt.string(from: day))
+            refreshBookmarks()
             fetchSegments { [weak self] in self?.startPlayback(at: t) }
         } else {
             startPlayback(at: t)
@@ -149,6 +151,15 @@ final class PlaybackController {
     }
 
     func toggleCalendar() { bar.toggleCalendar() }
+
+    /// Amber pins on the timeline: this camera's bookmarks within the
+    /// displayed day. Called on day changes and after adding a bookmark.
+    func refreshBookmarks() {
+        let start = day, end = dayEnd
+        bar.setBookmarks(BookmarkStore.all
+            .filter { $0.host == camera.host && $0.time >= start && $0.time < end }
+            .map { $0.time })
+    }
 
     func togglePause() {
         if let p = pausedAt {

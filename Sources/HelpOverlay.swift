@@ -22,6 +22,7 @@ enum HelpContext {
             ("Return", "open the selected camera"),
             ("2×click", "open a camera"),
             ("hold+drag", "reorder the grid"),
+            ("⇧B", "bookmarks"),
             ("⌘,", "settings"),
             ("Esc", "cancel selection / reorder"),
         ]
@@ -31,6 +32,7 @@ enum HelpContext {
             ("−", "close the last-added pane"),
             ("S", "snapshot → Desktop"),
             ("R", "record clip → Desktop"),
+            ("⇧B", "bookmarks"),
             ("2×click", "quick 2× zoom"),
             ("pinch", "zoom · scroll or drag pans"),
             ("2×click pane", "open that camera"),
@@ -45,6 +47,7 @@ enum HelpContext {
             ("C", "calendar"),
             ("S", "snapshot at this position"),
             ("R", "record clip from here"),
+            ("B / ⇧B", "bookmark this moment / list"),
             ("+", "add a supplementary pane"),
             ("−", "close the last-added pane"),
             ("scroll", "timeline zoom · pan"),
