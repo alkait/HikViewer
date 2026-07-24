@@ -123,6 +123,12 @@ accept the slower alarm-log motion.
 The app can start in full screen — controlled by the "Always start in full
 screen" checkbox in Settings (on by default).
 
+Live video is smoothed by default: frames are re-timed onto the camera's
+steady frame rate behind a ~0.2 s buffer, so Wi-Fi delivery jitter doesn't
+show as stutter. Untick "Smooth live video" in Settings for absolute minimum
+latency instead (frames then display the instant they arrive). Playback is
+unaffected either way.
+
 It also reopens where you left off: the grid, or the camera view you quit
 from — including its supplementary panes and, if it was in playback, the
 date and timeline position. Quitting from a view opened by double-clicking a

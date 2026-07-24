@@ -103,6 +103,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let nvrPassField = NSSecureTextField(string: "")
     private let fullScreenCheck = NSButton(checkboxWithTitle: "Always start in full screen", target: nil, action: nil)
     private let rememberCheck = NSButton(checkboxWithTitle: "Remember where I left off (open view, playback position)", target: nil, action: nil)
+    private let smoothCheck = NSButton(checkboxWithTitle: "Smooth live video (buffers ~0.2 s to absorb Wi-Fi jitter)", target: nil, action: nil)
     var onSave: (() -> Void)?
 
     private func flashHUD(_ text: String) {
@@ -172,6 +173,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             nvrRow,
             fullScreenCheck,
             rememberCheck,
+            smoothCheck,
             actions,
         ])
         stack.orientation = .vertical
@@ -204,6 +206,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         nvrPassField.stringValue = Settings.nvr?.password ?? ""
         fullScreenCheck.state = Settings.startFullScreen ? .on : .off
         rememberCheck.state = Settings.rememberLastView ? .on : .off
+        smoothCheck.state = Settings.smoothLive ? .on : .off
         table.reloadData()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
@@ -265,6 +268,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         guard !cams.isEmpty else { flashHUD("Add at least one camera"); return }
         Settings.startFullScreen = fullScreenCheck.state == .on
         Settings.rememberLastView = rememberCheck.state == .on
+        Settings.smoothLive = smoothCheck.state == .on
         let nvrHost = nvrHostField.stringValue.trimmingCharacters(in: .whitespaces)
         let nvrUser = nvrUserField.stringValue.trimmingCharacters(in: .whitespaces)
         let nvr: StoredNVR? = nvrHost.isEmpty ? nil : StoredNVR(

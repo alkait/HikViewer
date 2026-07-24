@@ -31,7 +31,7 @@ final class CameraStream {
         self.channelId = channelId
         self.ffmpegPath = ffmpegPath
         self.queue = DispatchQueue(label: "cam." + camera.host)
-        self.parser = VideoStreamParser(codec: camera.codec)
+        self.parser = VideoStreamParser(codec: camera.codec, smoothableLive: true)
         parser.onAccessUnit = { [weak self] sb, sync in
             guard let self else { return }
             if !self.gotFirstFrame {

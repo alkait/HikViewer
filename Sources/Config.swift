@@ -121,6 +121,15 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "rememberLastView") }
     }
 
+    /// Smooth live video: re-time live frames onto the camera's steady beat
+    /// behind a ~0.2 s buffer, absorbing Wi-Fi delivery jitter. Off = show
+    /// every frame the instant it arrives (lowest latency, judders on Wi-Fi).
+    /// Read per-frame, so toggling applies to running streams immediately.
+    static var smoothLive: Bool {
+        get { UserDefaults.standard.object(forKey: "smoothLive") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "smoothLive") }
+    }
+
     /// Playback speed (1/2/4×) — one preference shared across cameras.
     static var playbackSpeed: Int {
         get {

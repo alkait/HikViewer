@@ -65,6 +65,7 @@ final class SupplementaryTile: NSView {
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
         displayLayer.zPosition = -1
+        displayLayer.controlTimebase = makeHostClockTimebase()
         layer?.addSublayer(displayLayer)
         placeholderLayer.contentsGravity = .resizeAspect
         placeholderLayer.zPosition = -0.5
