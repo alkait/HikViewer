@@ -14,6 +14,10 @@ final class CameraEditController: NSWindowController {
     private let passField = NSSecureTextField(string: "")
     private let portField = NSTextField(string: "")
     private let codecPopup = NSPopUpButton()
+    private let nameDetect = NSButton()
+    private let codecDetect = NSButton()
+    private let nameSpinner = NSProgressIndicator()
+    private let codecSpinner = NSProgressIndicator()
     private var completion: ((StagedCam) -> Void)?
 
     init() {
@@ -25,16 +29,38 @@ final class CameraEditController: NSWindowController {
         for f in [nameField, hostField, userField, passField, portField] {
             f.widthAnchor.constraint(equalToConstant: 220).isActive = true
         }
+        for b in [nameDetect, codecDetect] {
+            b.title = "Detect"
+            b.bezelStyle = .rounded
+            b.target = self
+        }
+        nameDetect.action = #selector(detectName)
+        codecDetect.action = #selector(detectCodec)
+        for s in [nameSpinner, codecSpinner] {
+            s.style = .spinning
+            s.controlSize = .small
+            s.isDisplayedWhenStopped = false
+        }
+        let divider = NSBox()
+        divider.boxType = .separator
+        let nameRow = NSStackView(views: [nameField, nameDetect, nameSpinner])
+        let codecRow = NSStackView(views: [codecPopup, codecDetect, codecSpinner])
+
+        // Connection fields first, then a divider, then the two fields the
+        // Detect buttons can fill from the camera itself.
         let form = NSGridView(views: [
-            [NSTextField(labelWithString: "Name:"), nameField],
             [NSTextField(labelWithString: "Host / IP:"), hostField],
             [NSTextField(labelWithString: "Username:"), userField],
             [NSTextField(labelWithString: "Password:"), passField],
             [NSTextField(labelWithString: "RTSP port:"), portField],
-            [NSTextField(labelWithString: "Codec:"), codecPopup],
+            [divider],
+            [NSTextField(labelWithString: "Name:"), nameRow],
+            [NSTextField(labelWithString: "Codec:"), codecRow],
         ])
         form.rowSpacing = 10
         form.column(at: 0).xPlacement = .trailing
+        form.row(at: 4).mergeCells(in: NSRange(location: 0, length: 2))
+        form.cell(for: divider)?.xPlacement = .fill
 
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelTapped))
         cancel.keyEquivalent = "\u{1b}"
@@ -64,7 +90,7 @@ final class CameraEditController: NSWindowController {
         let c = staged?.cam
         nameField.stringValue = c?.name ?? ""
         hostField.stringValue = c?.host ?? ""
-        userField.stringValue = c?.user ?? "admin"
+        userField.stringValue = c?.user ?? ""
         passField.stringValue = staged?.pass ?? ""
         portField.stringValue = String(c?.port ?? 554)
         codecPopup.selectItem(at: (c?.codec ?? .hevc) == .h264 ? 1 : 0)
@@ -73,13 +99,58 @@ final class CameraEditController: NSWindowController {
 
     @objc private func cancelTapped() { endSheet() }
 
+    @objc private func detectName() { detect(into: .name) }
+    @objc private func detectCodec() { detect(into: .codec) }
+
+    private enum DetectField { case name, codec }
+
+    /// One read-only ISAPI GET with the staged credentials; fills only the
+    /// field whose button was pressed — pressing it is the consent to
+    /// overwrite.
+    private func detect(into target: DetectField) {
+        let host = hostField.stringValue.trimmingCharacters(in: .whitespaces)
+        let user = userField.stringValue.trimmingCharacters(in: .whitespaces)
+        let pass = passField.stringValue
+        guard !host.isEmpty, !user.isEmpty, !pass.isEmpty else {
+            flash("Enter host and credentials first"); return
+        }
+        let spinner = target == .name ? nameSpinner : codecSpinner
+        nameDetect.isEnabled = false
+        codecDetect.isEnabled = false
+        spinner.startAnimation(nil)
+        ISAPI.detectChannel(host: host, user: user, password: pass) { [weak self] name, codec in
+            guard let self else { return }
+            self.nameDetect.isEnabled = true
+            self.codecDetect.isEnabled = true
+            spinner.stopAnimation(nil)
+            switch target {
+            case .name:
+                guard let name, !name.isEmpty else {
+                    self.flash("Couldn't detect name — check host/credentials"); return
+                }
+                self.nameField.stringValue = name
+                self.flash("Detected: \(name)")
+            case .codec:
+                guard let codec else {
+                    self.flash("Couldn't detect codec — check host/credentials"); return
+                }
+                self.codecPopup.selectItem(at: codec == .h264 ? 1 : 0)
+                self.flash("Detected: \(codec.display)")
+            }
+        }
+    }
+
+    private func flash(_ text: String) {
+        if let v = window?.contentView { HUDView.flash(text, in: v) }
+    }
+
     @objc private func okTapped() {
         let host = hostField.stringValue.trimmingCharacters(in: .whitespaces)
         let user = userField.stringValue.trimmingCharacters(in: .whitespaces)
         let pass = passField.stringValue
         let port = Int(portField.stringValue.trimmingCharacters(in: .whitespaces)) ?? 0
         guard !host.isEmpty, !user.isEmpty, !pass.isEmpty, (1...65535).contains(port) else {
-            if let v = window?.contentView { HUDView.flash("Host, user, password and port are required", in: v) }
+            flash("Host, user, password and port are required")
             return
         }
         var name = nameField.stringValue.trimmingCharacters(in: .whitespaces)

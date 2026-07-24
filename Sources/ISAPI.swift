@@ -25,8 +25,55 @@ final class DigestDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
+/// Digest delegate with fixed credentials, for probing a camera whose login
+/// is still staged in the edit sheet (not yet saved to Settings).
+final class FixedCredDelegate: NSObject, URLSessionTaskDelegate {
+    private let user: String, pass: String
+    init(user: String, pass: String) { self.user = user; self.pass = pass }
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.previousFailureCount < 2 else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(user: user, password: pass, persistence: .forSession))
+    }
+}
+
 enum ISAPI {
     static let session = URLSession(configuration: .ephemeral, delegate: DigestDelegate(), delegateQueue: nil)
+
+    /// Read the main stream's channel name and codec (read-only GET), using
+    /// the credentials passed in rather than saved Settings. Completion on
+    /// main; both values nil when the camera can't be reached.
+    static func detectChannel(host: String, user: String, password: String,
+                              completion: @escaping (_ name: String?, _ codec: VideoCodec?) -> Void) {
+        func fail() { DispatchQueue.main.async { completion(nil, nil) } }
+        guard let url = URL(string: "http://\(host)/ISAPI/Streaming/channels/101") else { fail(); return }
+        let probe = URLSession(configuration: .ephemeral,
+                               delegate: FixedCredDelegate(user: user, pass: password), delegateQueue: nil)
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 6
+        probe.dataTask(with: req) { data, resp, _ in
+            defer { probe.finishTasksAndInvalidate() }
+            guard let data, (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let xml = String(data: data, encoding: .utf8) else { fail(); return }
+            let name = tag("channelName", in: xml)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var codec: VideoCodec?
+            if let t = tag("videoCodecType", in: xml) {
+                if t.hasPrefix("H.265") { codec = .hevc }
+                else if t.hasPrefix("H.264") { codec = .h264 }
+            }
+            DispatchQueue.main.async { completion(name, codec) }
+        }.resume()
+    }
+
+    private static func tag(_ name: String, in xml: String) -> String? {
+        guard let r1 = xml.range(of: "<\(name)>"), let r2 = xml.range(of: "</\(name)>"),
+              r1.upperBound <= r2.lowerBound else { return nil }
+        return String(xml[r1.upperBound..<r2.lowerBound])
+    }
 
     /// Ask the camera to emit an IDR frame right now instead of waiting out
     /// the GOP (~2-4 s). Runtime request only — changes no configuration.
