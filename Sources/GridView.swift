@@ -44,6 +44,10 @@ final class GridView: NSView {
     private var lastKeySel = 0
     private var keySelFade: DispatchWorkItem?
 
+    /// Which tile the nerd-stats panel should describe in grid mode: the
+    /// cursor tile, or (after the cursor fades) the last one it was on.
+    var statsSelection: Int { keySel ?? lastKeySel }
+
     private func handleGridKey(_ e: NSEvent) -> Bool {
         switch e.specialKey {
         case .leftArrow?: moveKeyCursor(dc: -1, dr: 0)

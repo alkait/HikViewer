@@ -12,6 +12,8 @@ final class VideoStreamParser {
     /// the Settings.smoothLive toggle, checked per frame. Playback never
     /// smooths — its pacing comes from the NVR.
     private let smoothableLive: Bool
+    /// Nerd-stats collector (live streams only; nil for playback).
+    private let stats: StreamStats?
     private var buf = [UInt8]()
     private var inNAL = false
     private var scanned = 0
@@ -33,14 +35,15 @@ final class VideoStreamParser {
     // at prev + gap (gap = EWMA of arrival spacing ≈ 1/fps), anchored
     // `smoothingDelay` behind arrival so late deliveries still make their
     // slot. The display layer's host-clock timebase honors these timestamps.
-    private static let smoothingDelay = 0.2
+    static let smoothingDelay = 0.2
     private var lastArrival = -1.0
     private var frameGap = 0.04     // seconds; EWMA of arrival gaps
     private var nextPTS = -1.0
 
-    init(codec: VideoCodec, smoothableLive: Bool = false) {
+    init(codec: VideoCodec, smoothableLive: Bool = false, stats: StreamStats? = nil) {
         self.codec = codec
         self.smoothableLive = smoothableLive
+        self.stats = stats
     }
 
     /// Drop partial data after a pipe restart; keep parameter sets (the camera
@@ -145,6 +148,10 @@ final class VideoStreamParser {
                     parameterSetPointers: ptrs, parameterSetSizes: sizes,
                     nalUnitHeaderLength: 4, extensions: nil, formatDescriptionOut: &fmt) == noErr {
                     format = fmt; fmtKey = key
+                    if let f = fmt {
+                        let d = CMVideoFormatDescriptionGetDimensions(f)
+                        stats?.noteFormat(width: d.width, height: d.height)
+                    }
                 }
             }}}
         case .h264:
@@ -162,6 +169,10 @@ final class VideoStreamParser {
                     parameterSetPointers: ptrs, parameterSetSizes: sizes,
                     nalUnitHeaderLength: 4, formatDescriptionOut: &fmt) == noErr {
                     format = fmt; fmtKey = key
+                    if let f = fmt {
+                        let d = CMVideoFormatDescriptionGetDimensions(f)
+                        stats?.noteFormat(width: d.width, height: d.height)
+                    }
                 }
             }}
         }
@@ -188,29 +199,38 @@ final class VideoStreamParser {
         guard copied == kCMBlockBufferNoErr else { return nil }
 
         let nowT = CMClockGetTime(CMClockGetHostTimeClock())
+        let now = nowT.seconds
+        // Arrival cadence is tracked whether or not smoothing runs — the
+        // smoother needs it when on, the nerd stats always. Burst arrivals
+        // (gap ≈ 0) are real data — the mean of the gaps is the true frame
+        // interval. Cap only stall outliers.
+        let gap = lastArrival >= 0 ? now - lastArrival : 0
+        if lastArrival >= 0 {
+            frameGap = min(max(frameGap + 0.03 * (min(gap, 0.35) - frameGap), 1.0 / 120.0), 0.35)
+        }
+        lastArrival = now
         let smoothing = smoothableLive && Settings.smoothLive
         var pts = nowT
+        var lead = -1.0
         if smoothing {
-            let now = nowT.seconds
-            if lastArrival >= 0 {
-                // Burst arrivals (gap ≈ 0) are real data — the mean of the
-                // gaps is the true frame interval. Cap only stall outliers.
-                let gap = min(now - lastArrival, 0.35)
-                frameGap = min(max(frameGap + 0.03 * (gap - frameGap), 1.0 / 120.0), 0.35)
-            }
-            lastArrival = now
             var t = nextPTS < 0 ? now + Self.smoothingDelay : nextPTS + frameGap
             // Re-anchor when the schedule drains (frame would show late) or
             // runs ahead of the buffer bound — one brief hiccup, then smooth.
-            if t < now + 0.005 || t > now + Self.smoothingDelay + 0.3 {
+            if nextPTS >= 0, t < now + 0.005 {
+                stats?.noteReanchor(drained: true)
+                t = now + Self.smoothingDelay
+            } else if nextPTS >= 0, t > now + Self.smoothingDelay + 0.3 {
+                stats?.noteReanchor(drained: false)
                 t = now + Self.smoothingDelay
             }
             nextPTS = t
+            lead = t - now
             pts = CMTime(seconds: t, preferredTimescale: 90_000)
         } else {
             nextPTS = -1
-            lastArrival = -1
         }
+        stats?.noteFrame(t: now, gap: gap, lead: lead,
+                         late: smoothing && lead < 0.03, size: payload.count, isKey: sync)
         var timing = CMSampleTimingInfo(
             duration: .invalid,
             presentationTimeStamp: pts,

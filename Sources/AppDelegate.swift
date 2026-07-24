@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var promotedOrigin: (index: Int, wasPlayback: Bool, position: Date?)?
     private var selector: SupplementarySelector?
     private var helpView: ShortcutHelpView?
+    /// Nerd-stats panel ("I"): follows the grid selection / focused camera.
+    private var nerdStats: NerdStatsPanel?
     private var bookmarkPrompt: BookmarkNamePrompt?
     private var bookmarkPane: BookmarkListPane?
     /// In-flight clip recording (R); at most one, tied to the camera it
@@ -109,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Settings.isConfigured && !Settings.cameras.isEmpty {
             rebuildStreams()
             restoreSession()
+            if Settings.nerdStats { showNerdStats() }
         } else {
             emptyLabel.isHidden = false
             settings.show()
@@ -239,6 +242,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         grid.needsLayout = true
         streams.forEach { $0.start() }
+        // The rebuilt tiles were added above the panel — put it back on top.
+        if let p = nerdStats { grid.addSubview(p, positioned: .above, relativeTo: nil) }
+    }
+
+    // MARK: nerd stats (I)
+
+    /// Which stream the panel describes: the focused camera's active live
+    /// stream (main when running, else its substream), or the grid tile
+    /// under the selection cursor.
+    private func nerdStatsTarget() -> (camera: Camera, stream: CameraStream)? {
+        if let i = grid.focused, i < streams.count {
+            return (streams[i].camera, mainStream ?? streams[i])
+        }
+        guard !streams.isEmpty else { return nil }
+        let i = min(grid.statsSelection, streams.count - 1)
+        return (streams[i].camera, streams[i])
+    }
+
+    private func toggleNerdStats() {
+        if let p = nerdStats {
+            p.dismiss()
+            nerdStats = nil
+            Settings.nerdStats = false
+            return
+        }
+        showNerdStats()
+        Settings.nerdStats = true
+    }
+
+    private func showNerdStats() {
+        guard nerdStats == nil else { return }
+        let p = NerdStatsPanel()
+        p.targetProvider = { [weak self] in self?.nerdStatsTarget() }
+        p.pidsProvider = { [weak self] in
+            guard let self else { return [] }
+            return ([self.mainStream] + self.streams).compactMap { $0?.stats.pid }
+        }
+        grid.addSubview(p, positioned: .above, relativeTo: nil)
+        p.place(in: grid)
+        nerdStats = p
     }
 
     /// Write the grid's current tile order back to config.json so it survives
@@ -367,6 +410,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleKey(_ e: NSEvent) -> Bool {
         if e.charactersIgnoringModifiers == "?" {
             toggleHelp()
+            return true
+        }
+        // I: nerd stats, from any context (checked before the playback block
+        // so it works there too).
+        if e.charactersIgnoringModifiers?.lowercased() == "i",
+           !e.modifierFlags.contains(.command) {
+            toggleNerdStats()
             return true
         }
         // Shift-B: the bookmark pane, from any context. Checked before the

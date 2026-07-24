@@ -130,6 +130,12 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "smoothLive") }
     }
 
+    /// Nerd-stats panel visibility ("I" toggles it; survives relaunch).
+    static var nerdStats: Bool {
+        get { UserDefaults.standard.bool(forKey: "nerdStats") }
+        set { UserDefaults.standard.set(newValue, forKey: "nerdStats") }
+    }
+
     /// Playback speed (1/2/4×) — one preference shared across cameras.
     static var playbackSpeed: Int {
         get {

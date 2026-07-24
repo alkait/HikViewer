@@ -8,8 +8,10 @@ import CoreMedia
 /// Live streams only — playback uses PlaybackStream (native RTSP).
 final class CameraStream {
     let camera: Camera
+    /// Nerd-stats collector for this stream (panel reads it; always written).
+    let stats = StreamStats()
     private let url: String
-    private let channelId: String
+    let channelId: String
     private let ffmpegPath: String
     private let queue: DispatchQueue
     private let parser: VideoStreamParser
@@ -31,7 +33,7 @@ final class CameraStream {
         self.channelId = channelId
         self.ffmpegPath = ffmpegPath
         self.queue = DispatchQueue(label: "cam." + camera.host)
-        self.parser = VideoStreamParser(codec: camera.codec, smoothableLive: true)
+        self.parser = VideoStreamParser(codec: camera.codec, smoothableLive: true, stats: stats)
         parser.onAccessUnit = { [weak self] sb, sync in
             guard let self else { return }
             if !self.gotFirstFrame {
@@ -115,6 +117,7 @@ final class CameraStream {
             guard let self else { return }
             self.queue.async {
                 self.lastData = Date()
+                self.stats.noteBytes(d.count)
                 // First bytes = RTSP session is playing; ask for an immediate
                 // IDR so we don't wait out the GOP for a decodable frame.
                 if !self.sentKeyFrameRequest {
@@ -129,6 +132,8 @@ final class CameraStream {
             guard let self else { return }
             self.queue.async {
                 guard !self.stopped else { return }
+                self.stats.setPid(nil)
+                self.stats.noteReconnect()
                 self.report("reconnecting…")
                 self.queue.asyncAfter(deadline: .now() + 2) { self.launch() }
             }
@@ -136,6 +141,7 @@ final class CameraStream {
         do {
             try p.run()
             process = p
+            stats.setPid(p.processIdentifier)
         } catch {
             report("ffmpeg failed to launch")
             queue.asyncAfter(deadline: .now() + 5) { self.launch() }
@@ -159,6 +165,7 @@ final class CameraStream {
     private func checkStale() {
         guard !stopped, let p = process, p.isRunning else { return }
         if Date().timeIntervalSince(lastData) > 12 {
+            stats.noteStall()
             report("stalled, restarting…")
             p.terminate()
         }

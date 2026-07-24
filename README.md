@@ -116,6 +116,7 @@ accept the slower alarm-log motion.
 | Arrow keys | move a red selection cursor between tiles (fades after 5 s) |
 | `Return` | focus the selected tile |
 | Long-press + drag a tile | reorder the grid (order is saved); `Esc` cancels |
+| `I` | nerd stats panel (selected tile / focused camera) |
 | `?` | keyboard shortcut help |
 | `Cmd-,` | Settings |
 | `Cmd-Q` | quit |
@@ -142,6 +143,20 @@ that spot (double-click again to restore). When zoomed: two-finger scroll or
 click-drag pans, a `2.4× ✕` badge (top-right) shows the level — click it to
 reset — and `Esc` zooms out first before leaving the view. Zoom survives
 switching between live and playback on the same camera.
+
+### Nerd stats (`I`)
+
+Press `I` anywhere to toggle a small draggable panel of live diagnostics for
+the selected grid tile (arrow keys move the selection) or the focused camera:
+codec/resolution and whether this Mac decodes it in **hardware or software**,
+measured fps, bitrate, GOP cadence, arrival **jitter** (σ + worst gap),
+stalls/reconnects, the smoothing buffer's health (headroom, re-anchors, late
+frames), app+ffmpeg CPU, and the Wi-Fi link under it all (RSSI, rate,
+channel). Hover any row's ⓘ icon for what the number means and how to read
+it; values turn amber/red when they cross trouble thresholds; **⧉ copy** puts
+a plain-text snapshot on the clipboard. Collection costs a few counters per
+frame — all aggregation runs only while the panel is open. The toggle and
+panel position survive relaunch.
 
 ### Snapshots & clips (focused view)
 
