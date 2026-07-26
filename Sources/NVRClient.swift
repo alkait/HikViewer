@@ -122,9 +122,14 @@ final class NVRClient {
         }.resume()
     }
 
-    // MARK: motion (generic + human/vehicle classified)
+    // MARK: event log (generic motion + intrusion) + human/vehicle classified
 
-    private var motionCache: [String: (stamp: Date, spans: [Int: [RecordingSegment]])] = [:]
+    private var eventCache: [String: (stamp: Date, motion: [Int: [RecordingSegment]],
+                                      intrusion: [Int: [RecordingSegment]])] = [:]
+    // Completions waiting on an in-flight eventLog crawl, by cache key.
+    // Touched only on the main thread.
+    private var eventLogPending: [String: [(_ motion: [Int: [RecordingSegment]],
+                                            _ intrusion: [Int: [RecordingSegment]]) -> Void]] = [:]
     private var targetCache: [String: (stamp: Date, spans: [RecordingSegment])] = [:]
 
     /// Past days never change; today's entries go stale as new events land.
@@ -132,26 +137,41 @@ final class NVRClient {
         windowEnd < Date() || Date().timeIntervalSince(stamp) < 60
     }
 
-    /// Generic motion spans for ALL channels in [from, to), from the NVR's
-    /// alarm log (motionStart/motionStop pairs — the recordings themselves are
-    /// continuous and carry no motion typing). One fetch serves every camera.
-    /// Completion on main.
-    func motionLog(from: Date, to: Date, completion: @escaping ([Int: [RecordingSegment]]) -> Void) {
+    /// Motion and intrusion spans for ALL channels in [from, to), from the
+    /// NVR's alarm log (motionStart/Stop and fieldDetectionStart/Stop pairs —
+    /// the recordings themselves are continuous and carry no event typing).
+    /// One fetch serves every camera and both event types. Completion on main.
+    /// May call `completion` twice: instantly with cached data (even stale),
+    /// then again with fresh data once a revalidating crawl lands. Concurrent
+    /// calls for the same window share one crawl.
+    func eventLog(from: Date, to: Date,
+                  completion: @escaping (_ motion: [Int: [RecordingSegment]],
+                                         _ intrusion: [Int: [RecordingSegment]]) -> Void) {
         let key = "\(Int(from.timeIntervalSince1970))"
-        if let hit = motionCache[key], cacheValid(hit.stamp, windowEnd: to) {
-            DispatchQueue.main.async { completion(hit.spans) }
+        if let hit = eventCache[key] {
+            DispatchQueue.main.async { completion(hit.motion, hit.intrusion) }
+            if cacheValid(hit.stamp, windowEnd: to) { return }
+            // Stale (today, >60 s old) — deliver again after revalidating.
+        }
+        if eventLogPending[key] != nil {        // a crawl is already running
+            eventLogPending[key]?.append(completion)
             return
         }
+        eventLogPending[key] = [completion]
         let outFmt = formatter("yyyy-MM-dd'T'HH:mm:ss'Z'")   // request: fake-Z local
         let inFmt = formatter("yyyy-MM-dd'T'HH:mm:ss")       // response: local, no suffix
-        var events: [(channel: Int, isStart: Bool, time: Date)] = []
+        var motionEvents: [(channel: Int, isStart: Bool, time: Date)] = []
+        var intrusionEvents: [(channel: Int, isStart: Bool, time: Date)] = []
         var seen = Set<String>()                             // "metaId|time" across stitched searches
 
         func finish() {
-            let spans = Self.pairMotionEvents(events, from: from, to: to)
+            let motion = Self.pairMotionEvents(motionEvents, from: from, to: to)
+            let intrusion = Self.pairMotionEvents(intrusionEvents, from: from, to: to)
             DispatchQueue.main.async {
-                self.motionCache[key] = (Date(), spans)
-                completion(spans)
+                self.eventCache[key] = (Date(), motion, intrusion)
+                for cb in self.eventLogPending.removeValue(forKey: key) ?? [] {
+                    cb(motion, intrusion)
+                }
             }
         }
 
@@ -166,6 +186,11 @@ final class NVRClient {
         let searchCap = 2000
 
         func search(cursor: Date, restartsLeft: Int) {
+            // One searchID for the whole session: re-sending it lets the NVR
+            // serve pages from its existing server-side search (~10 ms each);
+            // a fresh ID per page makes it re-run the search every time
+            // (~570 ms each — 31 s for a busy day).
+            let searchID = UUID().uuidString
             var sessionCount = 0
             var lastTime = cursor
             func page(_ position: Int) {
@@ -175,7 +200,7 @@ final class NVRClient {
                 req.setValue("application/xml", forHTTPHeaderField: "Content-Type")
                 req.timeoutInterval = 10
                 let body = """
-                <CMSearchDescription><searchID>\(UUID().uuidString)</searchID><metaId>log.std-cgi.com</metaId>\
+                <CMSearchDescription><searchID>\(searchID)</searchID><metaId>log.std-cgi.com</metaId>\
                 <timeSpanList><timeSpan><startTime>\(outFmt.string(from: cursor))</startTime><endTime>\(outFmt.string(from: to))</endTime></timeSpan></timeSpanList>\
                 <maxResults>64</maxResults><searchResultPostion>\(position)</searchResultPostion>\
                 <metadataList><metadataDescriptor>//metadata.std-cgi.com/types/logs?name=alarm&amp;subName=motionalarm</metadataDescriptor></metadataList>\
@@ -193,12 +218,17 @@ final class NVRClient {
                         guard let t = inFmt.date(from: item.time) else { continue }
                         if t > lastTime { lastTime = t }
                         guard seen.insert(item.metaId + "|" + item.time).inserted else { continue }
-                        // metaId: log.hikvision.com/Alarm/motionStart/15
+                        // metaId: log.hikvision.com/Alarm/motionStart/15,
+                        //         …/Alarm/fieldDetectionStart/9 (= intrusion)
                         let parts = item.metaId.split(separator: "/")
                         guard parts.count >= 2, let ch = Int(parts[parts.count - 1]) else { continue }
-                        let kind = parts[parts.count - 2]
-                        if kind == "motionStart" { events.append((ch, true, t)) }
-                        else if kind == "motionStop" { events.append((ch, false, t)) }
+                        switch parts[parts.count - 2] {
+                        case "motionStart": motionEvents.append((ch, true, t))
+                        case "motionStop": motionEvents.append((ch, false, t))
+                        case "fieldDetectionStart": intrusionEvents.append((ch, true, t))
+                        case "fieldDetectionStop": intrusionEvents.append((ch, false, t))
+                        default: break
+                        }
                     }
                     if parser.more && !parser.items.isEmpty {
                         page(position + parser.items.count)
@@ -256,6 +286,8 @@ final class NVRClient {
         }
         let fmt = formatter("yyyy-MM-dd'T'HH:mm:ssZZZZZ")
         let iso = ISO8601DateFormatter()
+        let searchID = UUID().uuidString    // one per search: pages reuse the
+                                            // NVR's server-side session
         var all: [RecordingSegment] = []
 
         func finish() {
@@ -274,7 +306,7 @@ final class NVRClient {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.timeoutInterval = 10
             let body: [String: Any] = ["SearchDescription": [
-                "searchID": UUID().uuidString,
+                "searchID": searchID,
                 "searchResultPosition": position,
                 "maxResults": 100,
                 "SearchCondList": [[

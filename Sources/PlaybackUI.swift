@@ -23,12 +23,14 @@ final class TimelineStrip: NSView {
         }
     }
     var segments: [RecordingSegment] = [] { didSet { needsDisplay = true } }
-    var motion: [RecordingSegment] = [] { didSet { needsDisplay = true } }
+    var events: [RecordingSegment] = [] { didSet { needsDisplay = true } }
+    var eventColor = TimelineStrip.motionColor { didSet { needsDisplay = true } }
     var bookmarks: [Date] = [] { didSet { needsDisplay = true } }
     var cursor: Date? { didSet { needsDisplay = true } }
     var onSeek: ((Date) -> Void)?
 
     static let motionColor = NSColor(calibratedRed: 0.92, green: 0.2, blue: 0.19, alpha: 1)
+    static let intrusionColor = NSColor(calibratedRed: 1.0, green: 0.58, blue: 0.0, alpha: 1)
     var onZoomStep: ((Int, Date) -> Void)?   // +1 zoom in / -1 out, centered on a date
     var onPan: ((TimeInterval) -> Void)?     // seconds to shift the window
 
@@ -85,10 +87,10 @@ final class TimelineStrip: NSView {
             r.fill()
         }
 
-        // Motion highlights (red) over the recorded band — generic motion or
-        // the human/vehicle filtered set, whatever the bar's toggles selected.
-        Self.motionColor.setFill()
-        for m in motion {
+        // Event highlights over the recorded band — motion (red) or intrusion
+        // (orange), whatever the event selector chose (E).
+        eventColor.setFill()
+        for m in events {
             let x0 = max(0, x(for: m.start)), x1 = min(bounds.width, x(for: m.end))
             guard x1 > 0, x0 < bounds.width else { continue }
             NSRect(x: x0, y: bandY, width: max(1, x1 - x0), height: bandH).fill()
@@ -407,8 +409,6 @@ final class PlaybackBarView: NSView {
     var onSpeedTap: (() -> Void)?
     var onPlayPause: (() -> Void)?
     var onZoomTap: (() -> Void)?
-    var onHumanTap: (() -> Void)?
-    var onVehicleTap: (() -> Void)?
     var onZoomStep: ((Int, Date) -> Void)? {
         get { strip.onZoomStep }
         set { strip.onZoomStep = newValue }
@@ -425,8 +425,6 @@ final class PlaybackBarView: NSView {
     private let dateButton = NSButton(title: "", target: nil, action: nil)
     private let zoomButton = NSButton(title: "", target: nil, action: nil)
     private let speedButton = NSButton(title: "", target: nil, action: nil)
-    private let humanButton = NSButton(title: "", target: nil, action: nil)
-    private let vehicleButton = NSButton(title: "", target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
     private var showsPaused = false
@@ -459,18 +457,6 @@ final class PlaybackBarView: NSView {
         zoomButton.action = #selector(zoomTapped)
         setZoomLabel("24h")
 
-        // Motion-filter toggles, mirroring the NVR's Human/Vehicle checkboxes:
-        // neither on = all motion; either/both on = only classified motion.
-        humanButton.isBordered = false
-        humanButton.target = self
-        humanButton.action = #selector(humanTapped)
-        humanButton.image = NSImage(systemSymbolName: "figure.walk", accessibilityDescription: "Human motion")
-        vehicleButton.isBordered = false
-        vehicleButton.target = self
-        vehicleButton.action = #selector(vehicleTapped)
-        vehicleButton.image = NSImage(systemSymbolName: "car.fill", accessibilityDescription: "Vehicle motion")
-        setMotionFilter(human: false, vehicle: false)
-
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isIndeterminate = true
@@ -487,7 +473,7 @@ final class PlaybackBarView: NSView {
         }
         calendar.onToday = { [weak self] in self?.onToday?() }
 
-        let stack = NSStackView(views: [playButton, dateButton, strip, humanButton, vehicleButton,
+        let stack = NSStackView(views: [playButton, dateButton, strip,
                                         spinner, timeLabel, zoomButton, speedButton])
         stack.orientation = .horizontal
         stack.spacing = 10
@@ -529,17 +515,13 @@ final class PlaybackBarView: NSView {
         strip.segments = segments
     }
 
-    func setMotion(_ spans: [RecordingSegment]) {
-        strip.motion = spans
+    func setEvents(_ spans: [RecordingSegment], color: NSColor) {
+        strip.events = spans
+        strip.eventColor = color
     }
 
     func setBookmarks(_ dates: [Date]) {
         strip.bookmarks = dates
-    }
-
-    func setMotionFilter(human: Bool, vehicle: Bool) {
-        humanButton.contentTintColor = human ? TimelineStrip.motionColor : NSColor(white: 1, alpha: 0.35)
-        vehicleButton.contentTintColor = vehicle ? TimelineStrip.motionColor : NSColor(white: 1, alpha: 0.35)
     }
 
     func setCursor(_ date: Date?, paused: Bool, label: String) {
@@ -585,10 +567,6 @@ final class PlaybackBarView: NSView {
     @objc private func zoomTapped() { onZoomTap?() }
 
     @objc private func playPauseTapped() { onPlayPause?() }
-
-    @objc private func humanTapped() { onHumanTap?() }
-
-    @objc private func vehicleTapped() { onVehicleTap?() }
 
     private static func barTitle(_ s: String) -> NSAttributedString {
         NSAttributedString(string: s, attributes: [

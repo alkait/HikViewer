@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// returns to this origin view with its panes restored.
     private var promotedOrigin: (index: Int, wasPlayback: Bool, position: Date?)?
     private var selector: SupplementarySelector?
+    private var eventSelector: EventSelector?
     private var helpView: ShortcutHelpView?
     /// Nerd-stats panel ("I"): follows the grid selection / focused camera.
     private var nerdStats: NerdStatsPanel?
@@ -455,9 +456,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "r": toggleRecording(); return true
             case "b": promptBookmark(pb); return true
             case "n":
-                if e.modifierFlags.contains(.shift) { pb.jumpToPreviousMotion() }
-                else { pb.jumpToNextMotion() }
+                if e.modifierFlags.contains(.shift) { pb.jumpToPreviousEvent() }
+                else { pb.jumpToNextEvent() }
                 return true
+            case "e": toggleEventSelector(); return true
             case "p": exitPlayback(); return true
             default: return false
             }
@@ -527,8 +529,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// E in playback: the event selector dialog, presented over the focused
+    /// tile exactly like the supplementary selector. E again, Enter, Esc, or
+    /// a click outside closes it.
+    private func toggleEventSelector() {
+        if eventSelector != nil { closeEventSelector(); return }
+        guard let pb = playback, let i = grid.focused, i < grid.tiles.count else { return }
+        let tile = grid.tiles[i]
+        let sel = pb.makeEventSelector()
+        sel.onDismiss = { [weak self] in self?.closeEventSelector() }
+        sel.frame = tile.bounds
+        sel.autoresizingMask = [.width, .height]
+        tile.addSubview(sel)
+        eventSelector = sel
+        window.makeFirstResponder(sel)
+    }
+
+    private func closeEventSelector() {
+        guard let sel = eventSelector else { return }
+        sel.removeFromSuperview()
+        eventSelector = nil
+        window.makeFirstResponder(grid)
+    }
+
     private func exitPlayback() {
         guard let pb = playback else { return }
+        closeEventSelector()
         pb.exit()
         playback = nil
         supp.switchToLive()

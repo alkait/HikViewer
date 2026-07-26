@@ -51,12 +51,16 @@ final class PlaybackController {
     private var calAnchor = Date()                  // first of the displayed month
     private var monthCache: [String: Set<Int>] = [:]
 
-    // Motion highlights: neither toggle on = all motion (alarm log); either
-    // on = only AcuSense-classified human/vehicle motion.
+    // Event highlights: the E selector picks none / motion / intrusion. For
+    // motion, neither filter on = all motion (alarm log); either on = only
+    // AcuSense-classified human/vehicle motion. Intrusion = the camera's
+    // fieldDetection events from the same alarm log.
+    private var eventBand: PlaybackEventBand = .motion
     private var humanFilter = false
     private var vehicleFilter = false
-    private var motionSpans: [RecordingSegment] = []   // what the timeline shows
-    private var motionToken = 0                     // drops stale async results
+    private var eventSpans: [RecordingSegment] = []    // what the timeline shows
+    private var eventToken = 0                      // drops stale async results
+    private var eventsLoading = false               // a span fetch is in flight
     private var channel: Int { track / 100 }
 
     init(camera: Camera, track: Int, client: NVRClient, tile: TileView) {
@@ -94,18 +98,18 @@ final class PlaybackController {
             self.setZoom(self.zoomIndex + dir, center: center)
         }
         bar.onPan = { [weak self] delta in self?.pan(delta) }
-        bar.onHumanTap = { [weak self] in self?.toggleMotionFilter(human: true) }
-        bar.onVehicleTap = { [weak self] in self?.toggleMotionFilter(human: false) }
         bar.setTimeZone(client.timeZone)
         bar.setSpeed("\(speed)×")
         tile.setFeed(.playback)
 
-        // The motion filter is one global choice shared across cameras (like
-        // speed); with nothing saved it defaults to both ON (human+vehicle).
+        // Event band + motion filter are one global choice shared across
+        // cameras (like speed); with nothing saved the default is motion with
+        // both filters ON (human+vehicle).
         let savedFilter = UserDefaults.standard.stringArray(forKey: filterDefaultsKey) ?? ["human", "vehicle"]
         humanFilter = savedFilter.contains("human")
         vehicleFilter = savedFilter.contains("vehicle")
-        bar.setMotionFilter(human: humanFilter, vehicle: vehicleFilter)
+        eventBand = UserDefaults.standard.string(forKey: eventBandDefaultsKey)
+            .flatMap(PlaybackEventBand.init(rawValue:)) ?? .motion
 
         day = cal.startOfDay(for: start)
         requestedStart = start
@@ -330,55 +334,72 @@ final class PlaybackController {
             if segs.isEmpty { self.tile?.setStatus("no recordings this day") }
             completion?()
         }
-        refreshMotion()
+        refreshEvents()
+        // Warm the day's event log now: the stitched crawl takes many seconds
+        // on a busy day, and starting it at playback-open (instead of when the
+        // selector or an intrusion switch first needs it) hides that latency.
+        // Concurrent calls share one crawl, so this never duplicates work.
+        client.eventLog(from: day, to: dayEnd) { _, _ in }
     }
 
-    // MARK: motion highlights
+    // MARK: event highlights (E selector: none / motion / intrusion)
 
     private let filterDefaultsKey = "motionFilter"
+    private let eventBandDefaultsKey = "playbackEventBand"
 
-    private func toggleMotionFilter(human: Bool) {
-        if human { humanFilter.toggle() } else { vehicleFilter.toggle() }
-        var saved: [String] = []
-        if humanFilter { saved.append("human") }
-        if vehicleFilter { saved.append("vehicle") }
-        UserDefaults.standard.set(saved, forKey: filterDefaultsKey)
-        bar.setMotionFilter(human: humanFilter, vehicle: vehicleFilter)
-        setMotionSpans([])
-        refreshMotion()
+    private func setEventSpans(_ spans: [RecordingSegment]) {
+        eventSpans = spans
+        bar.setEvents(spans, color: eventBand.color)
     }
 
-    private func setMotionSpans(_ spans: [RecordingSegment]) {
-        motionSpans = spans
-        bar.setMotion(spans)
-    }
-
-    /// N: jump to the next motion block after the current position — within
+    /// N: jump to the next event block after the current position — within
     /// the displayed day only; past the day's last block a HUD says so.
-    func jumpToNextMotion() {
+    func jumpToNextEvent() {
+        guard eventBand != .none else {
+            if let tile { HUDView.flash("No events shown", in: tile) }
+            return
+        }
         let pos = position()
-        guard let next = motionSpans.first(where: { $0.start > pos.addingTimeInterval(1) }) else {
-            if let tile { HUDView.flash("No more motion", in: tile) }
+        guard let next = eventSpans.first(where: { $0.start > pos.addingTimeInterval(1) }) else {
+            if let tile {
+                HUDView.flash(eventsLoading ? "Loading events…" : "No more \(eventBand.rawValue)", in: tile)
+            }
             return
         }
         seek(to: next.start)
     }
 
-    /// Shift-N: back to the previous motion block (same day-bounded rules).
-    func jumpToPreviousMotion() {
+    /// Shift-N: back to the previous event block (same day-bounded rules).
+    func jumpToPreviousEvent() {
+        guard eventBand != .none else {
+            if let tile { HUDView.flash("No events shown", in: tile) }
+            return
+        }
         let pos = position()
-        guard let prev = motionSpans.last(where: { $0.start < pos.addingTimeInterval(-1) }) else {
-            if let tile { HUDView.flash("No earlier motion", in: tile) }
+        guard let prev = eventSpans.last(where: { $0.start < pos.addingTimeInterval(-1) }) else {
+            if let tile {
+                HUDView.flash(eventsLoading ? "Loading events…" : "No earlier \(eventBand.rawValue)", in: tile)
+            }
             return
         }
         seek(to: prev.start)
     }
 
-    private func refreshMotion() {
-        motionToken += 1
-        let token = motionToken
+    private func refreshEvents() {
+        eventToken += 1
+        let token = eventToken
         let from = day, to = dayEnd
-        if humanFilter || vehicleFilter {
+        eventsLoading = eventBand != .none
+        switch eventBand {
+        case .none:
+            setEventSpans([])
+        case .intrusion:
+            client.eventLog(from: from, to: to) { [weak self] _, intrusion in
+                guard let self, self.eventToken == token else { return }
+                self.eventsLoading = false
+                self.setEventSpans(intrusion[self.channel] ?? [])
+            }
+        case .motion where humanFilter || vehicleFilter:
             var types: [String] = []
             if humanFilter { types.append("human") }
             if vehicleFilter { types.append("vehicle") }
@@ -386,16 +407,90 @@ final class PlaybackController {
             var pending = types.count
             for type in types {
                 client.classifiedSpans(channel: channel, from: from, to: to, type: type) { [weak self] spans in
-                    guard let self, self.motionToken == token else { return }
+                    guard let self, self.eventToken == token else { return }
                     union += spans
                     pending -= 1
-                    if pending == 0 { self.setMotionSpans(NVRClient.merge(union)) }
+                    if pending == 0 {
+                        self.eventsLoading = false
+                        self.setEventSpans(NVRClient.merge(union))
+                    }
                 }
             }
-        } else {
-            client.motionLog(from: from, to: to) { [weak self] map in
-                guard let self, self.motionToken == token else { return }
-                self.setMotionSpans(map[self.channel] ?? [])
+        case .motion:
+            client.eventLog(from: from, to: to) { [weak self] motion, _ in
+                guard let self, self.eventToken == token else { return }
+                self.eventsLoading = false
+                self.setEventSpans(motion[self.channel] ?? [])
+            }
+        }
+    }
+
+    // MARK: event selector (E / the bar's chip)
+
+    /// Fully wired selector dialog; the AppDelegate only presents/dismisses it.
+    func makeEventSelector() -> EventSelector {
+        let sel = EventSelector(current: eventBand, human: humanFilter, vehicle: vehicleFilter)
+        sel.onApply = { [weak self] band, human, vehicle in
+            self?.applyEventSelection(band: band, human: human, vehicle: vehicle)
+        }
+        sel.onPendingChange = { [weak self, weak sel] in
+            guard let self, let sel else { return }
+            self.pushEventCounts(to: sel)
+        }
+        pushEventCounts(to: sel)
+        return sel
+    }
+
+    private func applyEventSelection(band: PlaybackEventBand, human: Bool, vehicle: Bool) {
+        let filterChanged = human != humanFilter || vehicle != vehicleFilter
+        let bandChanged = band != eventBand
+        eventBand = band
+        humanFilter = human
+        vehicleFilter = vehicle
+        UserDefaults.standard.set(band.rawValue, forKey: eventBandDefaultsKey)
+        var saved: [String] = []
+        if human { saved.append("human") }
+        if vehicle { saved.append("vehicle") }
+        UserDefaults.standard.set(saved, forKey: filterDefaultsKey)
+        guard bandChanged || filterChanged else { return }
+        setEventSpans([])
+        refreshEvents()
+    }
+
+    /// Counts for the selector's cells: events intersecting the *visible*
+    /// timeline window. Pushed as each (cached or fresh) fetch lands; the
+    /// motion count follows the dialog's pending filter state.
+    private func pushEventCounts(to sel: EventSelector) {
+        let lo = winStart, hi = winEnd
+        let from = day, to = dayEnd
+        func clipped(_ spans: [RecordingSegment]) -> Int {
+            spans.filter { $0.end > lo && $0.start < hi }.count
+        }
+        sel.setMotionCount(nil)
+        sel.setIntrusionCount(nil)
+        let human = sel.pendingHuman, vehicle = sel.pendingVehicle
+        client.eventLog(from: from, to: to) { [weak self, weak sel] motion, intrusion in
+            guard let self, let sel else { return }
+            sel.setIntrusionCount(clipped(intrusion[self.channel] ?? []))
+            // Still-pending filters may have changed while fetching.
+            if !sel.pendingHuman, !sel.pendingVehicle {
+                sel.setMotionCount(clipped(motion[self.channel] ?? []))
+            }
+        }
+        guard human || vehicle else { return }
+        var types: [String] = []
+        if human { types.append("human") }
+        if vehicle { types.append("vehicle") }
+        var union: [RecordingSegment] = []
+        var pending = types.count
+        for type in types {
+            client.classifiedSpans(channel: channel, from: from, to: to, type: type) { [weak sel] spans in
+                guard let sel else { return }
+                union += spans
+                pending -= 1
+                if pending == 0, sel.pendingHuman == human, sel.pendingVehicle == vehicle {
+                    sel.setMotionCount(clipped(NVRClient.merge(union)))
+                }
             }
         }
     }
