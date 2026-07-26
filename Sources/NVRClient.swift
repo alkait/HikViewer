@@ -145,6 +145,7 @@ final class NVRClient {
         let outFmt = formatter("yyyy-MM-dd'T'HH:mm:ss'Z'")   // request: fake-Z local
         let inFmt = formatter("yyyy-MM-dd'T'HH:mm:ss")       // response: local, no suffix
         var events: [(channel: Int, isStart: Bool, time: Date)] = []
+        var seen = Set<String>()                             // "metaId|time" across stitched searches
 
         func finish() {
             let spans = Self.pairMotionEvents(events, from: from, to: to)
@@ -153,40 +154,71 @@ final class NVRClient {
                 completion(spans)
             }
         }
-        func page(_ position: Int) {
-            guard let u = URL(string: "http://\(nvr.host)/ISAPI/ContentMgmt/logSearch") else { finish(); return }
-            var req = URLRequest(url: u)
-            req.httpMethod = "POST"
-            req.setValue("application/xml", forHTTPHeaderField: "Content-Type")
-            req.timeoutInterval = 10
-            let body = """
-            <CMSearchDescription><searchID>\(UUID().uuidString)</searchID><metaId>log.std-cgi.com</metaId>\
-            <timeSpanList><timeSpan><startTime>\(outFmt.string(from: from))</startTime><endTime>\(outFmt.string(from: to))</endTime></timeSpan></timeSpanList>\
-            <maxResults>64</maxResults><searchResultPostion>\(position)</searchResultPostion>\
-            <metadataList><metadataDescriptor>//metadata.std-cgi.com/types/logs?name=alarm&amp;subName=motionalarm</metadataDescriptor></metadataList>\
-            </CMSearchDescription>
-            """
-            req.httpBody = Data(body.utf8)
-            ISAPI.session.dataTask(with: req) { data, _, _ in
-                guard let data else { finish(); return }
-                let parser = MotionLogParser()
-                let xml = XMLParser(data: data)
-                xml.delegate = parser
-                xml.parse()
-                for item in parser.items {
-                    // metaId: log.hikvision.com/Alarm/motionStart/15
-                    let parts = item.metaId.split(separator: "/")
-                    guard parts.count >= 2, let ch = Int(parts[parts.count - 1]),
-                          let t = inFmt.date(from: item.time) else { continue }
-                    let kind = parts[parts.count - 2]
-                    if kind == "motionStart" { events.append((ch, true, t)) }
-                    else if kind == "motionStop" { events.append((ch, false, t)) }
-                }
-                if parser.more && !parser.items.isEmpty { page(position + parser.items.count) }
-                else { finish() }
-            }.resume()
+
+        // The NVR silently truncates every log search at 2000 entries — no
+        // error, no MORE flag, it just looks like a clean end of data. All log
+        // types count against the cap (the subName filter below is ignored),
+        // so on a busy day a full-day search ends hours early and the rest of
+        // the day shows no motion. When a search dies at the cap, stitch: run
+        // a fresh search from the last entry's timestamp (inclusive, so
+        // same-second entries survive; `seen` dedupes the overlap) until the
+        // window is genuinely covered.
+        let searchCap = 2000
+
+        func search(cursor: Date, restartsLeft: Int) {
+            var sessionCount = 0
+            var lastTime = cursor
+            func page(_ position: Int) {
+                guard let u = URL(string: "http://\(nvr.host)/ISAPI/ContentMgmt/logSearch") else { finish(); return }
+                var req = URLRequest(url: u)
+                req.httpMethod = "POST"
+                req.setValue("application/xml", forHTTPHeaderField: "Content-Type")
+                req.timeoutInterval = 10
+                let body = """
+                <CMSearchDescription><searchID>\(UUID().uuidString)</searchID><metaId>log.std-cgi.com</metaId>\
+                <timeSpanList><timeSpan><startTime>\(outFmt.string(from: cursor))</startTime><endTime>\(outFmt.string(from: to))</endTime></timeSpan></timeSpanList>\
+                <maxResults>64</maxResults><searchResultPostion>\(position)</searchResultPostion>\
+                <metadataList><metadataDescriptor>//metadata.std-cgi.com/types/logs?name=alarm&amp;subName=motionalarm</metadataDescriptor></metadataList>\
+                </CMSearchDescription>
+                """
+                req.httpBody = Data(body.utf8)
+                ISAPI.session.dataTask(with: req) { data, _, _ in
+                    guard let data else { finish(); return }
+                    let parser = MotionLogParser()
+                    let xml = XMLParser(data: data)
+                    xml.delegate = parser
+                    xml.parse()
+                    sessionCount += parser.items.count
+                    for item in parser.items {
+                        guard let t = inFmt.date(from: item.time) else { continue }
+                        if t > lastTime { lastTime = t }
+                        guard seen.insert(item.metaId + "|" + item.time).inserted else { continue }
+                        // metaId: log.hikvision.com/Alarm/motionStart/15
+                        let parts = item.metaId.split(separator: "/")
+                        guard parts.count >= 2, let ch = Int(parts[parts.count - 1]) else { continue }
+                        let kind = parts[parts.count - 2]
+                        if kind == "motionStart" { events.append((ch, true, t)) }
+                        else if kind == "motionStop" { events.append((ch, false, t)) }
+                    }
+                    if parser.more && !parser.items.isEmpty {
+                        page(position + parser.items.count)
+                    } else if sessionCount >= searchCap, lastTime > cursor, lastTime < to, restartsLeft > 0 {
+                        // Quirk: the NVR filters *Stop entries by their event's
+                        // START time, so restarting exactly at the cap would
+                        // drop the stop of any motion still running across the
+                        // restart point (leaving a falsely open span). Back the
+                        // cursor off 30 min to re-cover straddlers; `seen`
+                        // dedupes the overlap, and max() keeps forward progress.
+                        let next = max(cursor.addingTimeInterval(1), lastTime.addingTimeInterval(-1800))
+                        search(cursor: next, restartsLeft: restartsLeft - 1)
+                    } else {
+                        finish()
+                    }
+                }.resume()
+            }
+            page(0)
         }
-        page(0)
+        search(cursor: from, restartsLeft: 16)
     }
 
     static func pairMotionEvents(_ events: [(channel: Int, isStart: Bool, time: Date)],
