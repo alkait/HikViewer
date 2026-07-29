@@ -254,20 +254,34 @@ final class NVRClient {
     static func pairMotionEvents(_ events: [(channel: Int, isStart: Bool, time: Date)],
                                  from: Date, to: Date) -> [Int: [RecordingSegment]] {
         var out: [Int: [RecordingSegment]] = [:]
-        var open: [Int: Date] = [:]
+        // A channel can have overlapping events (the NVR logs each detection
+        // region independently: start/start/stop/stop), so track open depth —
+        // the span closes only when every open event has stopped. Otherwise
+        // the second stop looks orphaned and takes the began-before-window
+        // fallback, painting a false band from the window start.
+        var open: [Int: (since: Date, depth: Int)] = [:]
         for e in events.sorted(by: { $0.time < $1.time }) {
             if e.isStart {
-                if open[e.channel] == nil { open[e.channel] = e.time }
-            } else if let s = open.removeValue(forKey: e.channel) {
-                out[e.channel, default: []].append(RecordingSegment(start: s, end: e.time))
+                if let o = open[e.channel] {
+                    open[e.channel] = (o.since, o.depth + 1)
+                } else {
+                    open[e.channel] = (e.time, 1)
+                }
+            } else if let o = open[e.channel] {
+                if o.depth > 1 {
+                    open[e.channel] = (o.since, o.depth - 1)
+                } else {
+                    open[e.channel] = nil
+                    out[e.channel, default: []].append(RecordingSegment(start: o.since, end: e.time))
+                }
             } else {
-                // Stop without a start: motion began before the window.
+                // Stop without any start: motion began before the window.
                 out[e.channel, default: []].append(RecordingSegment(start: from, end: e.time))
             }
         }
         let clamp = min(to, Date())
-        for (ch, s) in open where s < clamp {
-            out[ch, default: []].append(RecordingSegment(start: s, end: clamp))
+        for (ch, o) in open where o.since < clamp {
+            out[ch, default: []].append(RecordingSegment(start: o.since, end: clamp))
         }
         return out.mapValues { merge($0) }
     }
