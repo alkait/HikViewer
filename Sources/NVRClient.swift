@@ -288,9 +288,13 @@ final class NVRClient {
 
     /// AcuSense-classified motion spans ("human" or "vehicle") for one channel
     /// in [from, to) via /ISAPI/ContentMgmt/SearchByTargetType — the same API
-    /// behind the NVR web player's Human/Vehicle checkboxes. Unlike the XML
-    /// APIs this one speaks real ISO 8601 with offsets, not fake-Z local time.
-    /// Completion on main.
+    /// behind the NVR web player's Human/Vehicle checkboxes. Response times
+    /// look like real ISO 8601 with offsets, but the offset lies on fresh
+    /// records: for ~20–80 s after an event the NVR reports the local wall
+    /// clock with "+00:00", then re-reports the same record with the true
+    /// offset. Trusting it threw just-happened events 4 h into the future — a
+    /// phantom tick beyond the recorded band — so parse the digits as
+    /// NVR-local and ignore the offset. Completion on main.
     func classifiedSpans(channel: Int, from: Date, to: Date, type: String,
                          completion: @escaping ([RecordingSegment]) -> Void) {
         let key = "\(channel)|\(type)|\(Int(from.timeIntervalSince1970))"
@@ -298,8 +302,12 @@ final class NVRClient {
             DispatchQueue.main.async { completion(hit.spans) }
             return
         }
-        let fmt = formatter("yyyy-MM-dd'T'HH:mm:ssZZZZZ")
-        let iso = ISO8601DateFormatter()
+        let fmt = formatter("yyyy-MM-dd'T'HH:mm:ssZZZZZ")   // request: real offsets are fine to send
+        let inFmt = formatter("yyyy-MM-dd'T'HH:mm:ss")      // response: digits only, offset untrusted
+        func parse(_ s: Any?) -> Date? {
+            guard let s = s as? String, s.count >= 19 else { return nil }
+            return inFmt.date(from: String(s.prefix(19)))
+        }
         let searchID = UUID().uuidString    // one per search: pages reuse the
                                             // NVR's server-side session
         var all: [RecordingSegment] = []
@@ -343,8 +351,8 @@ final class NVRClient {
                     for info in match["RecordInfoList"] as? [[String: Any]] ?? [] {
                         count += 1
                         guard let rt = info["RecordTime"] as? [String: Any],
-                              let s = (rt["startTime"] as? String).flatMap(iso.date(from:)),
-                              let e = (rt["endTime"] as? String).flatMap(iso.date(from:)),
+                              let s = parse(rt["startTime"]),
+                              let e = parse(rt["endTime"]),
                               e > s else { continue }
                         all.append(RecordingSegment(start: s, end: e))
                     }
