@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# push.sh — push to GitHub, optionally cutting a stable release tag.
+# push.sh — push to GitHub and cut a release tag. Every push releases;
+# there is no dev/prerelease channel.
 #
-#   ./push.sh          # plain push: CI compile check only, nothing published
-#   ./push.sh patch    # push + tag vX.Y.Z -> vX.Y.(Z+1): release
+#   ./push.sh          # push + tag vX.Y.Z -> vX.Y.(Z+1): patch release
 #   ./push.sh minor    # push + tag vX.Y.Z -> vX.(Y+1).0: release
 #   ./push.sh major    # push + tag vX.Y.Z -> v(X+1).0.0: release
 #
-# Only tag pushes publish a release (.github/workflows/release.yml) — that's
-# what the in-app updater (Check for Updates…) and the curl|bash installer
-# track via releases/latest.
+# The tag push triggers .github/workflows/release.yml, which publishes the
+# release that the in-app updater (Check for Updates…) and the curl|bash
+# installer track via releases/latest.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-bump="${1:-}"
+bump="${1:-patch}"
 case "$bump" in
-  ""|patch|minor|major) ;;
-  *) echo "usage: $0 [patch|minor|major]" >&2; exit 1 ;;
+  patch|minor|major) ;;
+  *) echo "usage: $0 [patch|minor|major]  (default: patch)" >&2; exit 1 ;;
 esac
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -26,8 +26,6 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 git push origin main
-
-[ -z "$bump" ] && { echo "Pushed. CI runs a compile check only — no release published."; exit 0; }
 
 # Base the bump on the newest vX.Y.Z tag anywhere (fetch first so a tag cut
 # from another machine isn't missed and reused).

@@ -2,12 +2,14 @@
 #
 # What it does:
 #   - On every push to main: run ./build.sh (universal arm64+x86_64 binary,
-#     .app bundle, ad-hoc signed) as a compile check. Nothing is published.
+#     .app bundle, ad-hoc signed) as a compile check. Nothing is published —
+#     this only catches raw `git push`; the normal path is ./push.sh, which
+#     always tags.
 #   - On every push of a tag matching `v*.*.*` (e.g. `v1.0.0`): the same
 #     build, packaged and published as a release at that tag. These are what
-#     the in-app updater and install.sh track — cut one with
-#     `./push.sh patch|minor|major` whenever you want installed apps to pick
-#     up the changes.
+#     the in-app updater and install.sh track — ./push.sh cuts one on every
+#     run (patch bump by default; minor|major on request). There is no
+#     dev/prerelease channel.
 #
 # What it does NOT do (intentionally):
 #   - Developer-ID signing or notarization. build.sh ad-hoc signs, so
