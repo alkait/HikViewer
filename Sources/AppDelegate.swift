@@ -25,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var helpView: ShortcutHelpView?
     /// Nerd-stats panel ("I"): follows the grid selection / focused camera.
     private var nerdStats: NerdStatsPanel?
+    /// Camera event config (motion/intrusion) for the panel, read via the NVR.
+    private let eventInfo = EventInfoStore()
+    private var nvrPreparing = false
     private var bookmarkPrompt: BookmarkNamePrompt?
     private var bookmarkPane: BookmarkListPane?
     /// In-flight clip recording (R); at most one, tied to the camera it
@@ -279,6 +282,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.pidsProvider = { [weak self] in
             guard let self else { return [] }
             return ([self.mainStream] + self.streams).compactMap { $0?.stats.pid }
+        }
+        // Camera event config comes through the NVR (its channel map resolves
+        // camera host -> channel); reuse playback's client, creating it here
+        // when the panel is opened before any playback.
+        p.eventsProvider = { [weak self] cam in
+            guard let self, let nvr = Settings.nvr, !nvr.host.isEmpty else { return .noNVR }
+            if self.nvrClient == nil { self.nvrClient = NVRClient(nvr: nvr) }
+            guard let client = self.nvrClient else { return .noNVR }
+            if client.channelByHost.isEmpty {
+                if !self.nvrPreparing {
+                    self.nvrPreparing = true
+                    client.prepare { [weak self] _ in self?.nvrPreparing = false }
+                }
+                return .connecting
+            }
+            guard let ch = client.channelByHost[cam.host] else { return .notRecorded }
+            return .ready(self.eventInfo.info(nvrHost: nvr.host, channel: ch))
+        }
+        p.zonesApply = { [weak self] host, motion, intrusion in
+            guard let self else { return }
+            for (i, t) in self.grid.tiles.enumerated() {
+                let match = i < self.streams.count && self.streams[i].camera.host == host
+                t.setMotionOverlay(match ? motion : nil)
+                t.setZoneOverlay(match ? intrusion : nil)
+            }
         }
         grid.addSubview(p, positioned: .above, relativeTo: nil)
         p.place(in: grid)

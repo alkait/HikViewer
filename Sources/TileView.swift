@@ -12,6 +12,12 @@ final class TileView: NSView {
     var onDoubleClick: (() -> Void)?
 
     private let placeholderLayer = CALayer()
+    /// Configured intrusion zones / motion areas (nerd-stats checkboxes),
+    /// drawn over the video in the timeline's event band colors.
+    private let zoneLayer = CAShapeLayer()
+    private var zonePolys: [[CGPoint]]?
+    private let motionLayer = CAShapeLayer()
+    private var motionPolys: [[CGPoint]]?
     private let cachedBadge = NSTextField(labelWithString: "cached")
     private let recBadge = NSTextField(labelWithString: "")
     private var videoOnScreen = false  // main thread
@@ -60,6 +66,18 @@ final class TileView: NSView {
         placeholderLayer.contentsGravity = .resizeAspect
         placeholderLayer.zPosition = -0.5
         layer?.addSublayer(placeholderLayer)
+        // Overlay colors match the timeline's event bands — one color per
+        // concept. Motion sits under intrusion so both outlines stay visible.
+        for (l, color, z) in [(motionLayer, TimelineStrip.motionColor, CGFloat(-0.42)),
+                              (zoneLayer, TimelineStrip.intrusionColor, -0.4)] {
+            l.zPosition = z                 // over the video, under badges/labels
+            l.fillColor = color.withAlphaComponent(0.14).cgColor
+            l.strokeColor = color.withAlphaComponent(0.85).cgColor
+            l.lineWidth = 2
+            l.lineJoin = .round
+            l.masksToBounds = true          // a zoomed video rect extends past the tile
+            layer?.addSublayer(l)
+        }
 
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = .white
@@ -257,6 +275,10 @@ final class TileView: NSView {
             displayLayer.frame = bounds
         }
         placeholderLayer.frame = bounds
+        zoneLayer.frame = bounds
+        zoneLayer.path = overlayPath(zonePolys)
+        motionLayer.frame = bounds
+        motionLayer.path = overlayPath(motionPolys)
         CATransaction.commit()
         backButton.frame = NSRect(x: 6, y: bounds.height - 34, width: 28, height: 28)
         label.frame.origin = NSPoint(x: backButton.isHidden ? 6 : 40,
@@ -269,6 +291,46 @@ final class TileView: NSView {
         if !zoomBadge.isHidden { recX -= zoomBadge.frame.width + 6 }
         recBadge.frame.origin = NSPoint(x: recX, y: bounds.height - recBadge.frame.height - 6)
         onLayoutChange?()
+    }
+
+    /// Show the camera's configured intrusion zones (normalized 0–1 polygons,
+    /// bottom-left origin like AppKit) over the video; nil hides them. Purely
+    /// a display overlay — geometry follows the video's fitted rect and zoom.
+    func setZoneOverlay(_ polys: [[CGPoint]]?) {
+        guard polys != zonePolys else { return }
+        zonePolys = polys
+        needsLayout = true
+    }
+
+    /// Same for the motion detection areas (grid cells merged to rectangles).
+    func setMotionOverlay(_ polys: [[CGPoint]]?) {
+        guard polys != motionPolys else { return }
+        motionPolys = polys
+        needsLayout = true
+    }
+
+    /// Where the video pixels actually sit: the aspect-fitted rect inside the
+    /// (possibly zoomed) display layer. Before the first frame reports its
+    /// size, falls back to the whole layer.
+    private func overlayPath(_ polys: [[CGPoint]]?) -> CGPath? {
+        guard let polys, !polys.isEmpty else { return nil }
+        let f = displayLayer.frame
+        var rect = f
+        if videoDims.width > 0, videoDims.height > 0, f.width > 0, f.height > 0 {
+            let aspect = videoDims.width / videoDims.height
+            var vw = f.width, vh = f.height
+            if f.width / f.height > aspect { vw = f.height * aspect } else { vh = f.width / aspect }
+            rect = NSRect(x: f.minX + (f.width - vw) / 2, y: f.minY + (f.height - vh) / 2,
+                          width: vw, height: vh)
+        }
+        let path = CGMutablePath()
+        for poly in polys where poly.count >= 3 {
+            path.addLines(between: poly.map {
+                CGPoint(x: rect.minX + $0.x * rect.width, y: rect.minY + $0.y * rect.height)
+            })
+            path.closeSubpath()
+        }
+        return path
     }
 
     func setBackVisible(_ visible: Bool) {

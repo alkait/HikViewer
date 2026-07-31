@@ -181,6 +181,10 @@ final class NerdStatsPanel: NSView {
     var targetProvider: () -> (camera: Camera, stream: CameraStream)? = { nil }
     /// All live ffmpeg pids (grid substreams + focused main stream).
     var pidsProvider: () -> [pid_t] = { [] }
+    /// Camera event config (motion/intrusion + arming schedules) via the NVR.
+    var eventsProvider: (Camera) -> EventInfoResult = { _ in .noNVR }
+    /// Apply (or clear, with nil) the motion/intrusion overlays for a host's tile.
+    var zonesApply: (_ host: String, _ motion: [[CGPoint]]?, _ intrusion: [[CGPoint]]?) -> Void = { _, _, _ in }
 
     private var timer: Timer?
     private let titleField = NSTextField(labelWithString: "NERD STATS")
@@ -210,6 +214,8 @@ final class NerdStatsPanel: NSView {
     private var wifiCache: SystemProbes.WiFi?
     private var wifiIsStale = true
     private var lastCopyText = ""
+    private var zonesCheck: NSButton!
+    private var motionCheck: NSButton!
 
     private var dragOffset = NSPoint.zero
 
@@ -262,6 +268,13 @@ final class NerdStatsPanel: NSView {
             let box = NSBox()
             box.boxType = .separator
             views.append(box)
+        }
+        func addSection(_ name: String) {
+            addRule()
+            let l = NSTextField(labelWithString: name)
+            l.font = .monospacedSystemFont(ofSize: 10, weight: .bold)
+            l.textColor = cDim
+            views.append(l)
         }
 
         addRow("stream", "stream", """
@@ -347,6 +360,35 @@ final class NerdStatsPanel: NSView {
             weak signal means distance/walls; strong signal with an unstable rate \
             means interference or congestion. Shows "no Wi-Fi" when wired.
             """)
+        addSection("EVENTS")
+        addRow("motion", "motion", """
+            Motion detection as configured on the camera (read through the NVR, \
+            read-only): whether it's enabled and its arming schedule. Outside the \
+            armed window the camera still records but flags no motion events, so \
+            nothing shows on the playback motion bands there.
+            """)
+        addRow("intrusion", "intrusion", """
+            AcuSense intrusion (field detection) as configured on the camera: \
+            enabled state and arming schedule. The checkbox below draws the \
+            configured zone polygons over this camera's video — display only, \
+            nothing is written to the camera or NVR.
+            """)
+        func makeCheck(_ title: String, key: String, tip: String) -> NSButton {
+            let b = NSButton(checkboxWithTitle: "", target: self, action: #selector(zonesToggled))
+            b.attributedTitle = NSAttributedString(
+                string: title,
+                attributes: [.foregroundColor: cDim,
+                             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)])
+            b.controlSize = .small
+            b.state = UserDefaults.standard.bool(forKey: key) ? .on : .off
+            b.toolTip = tip
+            views.append(b)
+            return b
+        }
+        motionCheck = makeCheck("draw motion areas on video", key: "nerdDrawMotion",
+                                tip: "Overlay this camera's configured motion detection areas on its video. Display only — nothing is sent to the camera.")
+        zonesCheck = makeCheck("draw intrusion zones on video", key: "nerdDrawZones",
+                               tip: "Overlay this camera's configured intrusion zones on its video. Display only — nothing is sent to the camera.")
 
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
@@ -389,7 +431,14 @@ final class NerdStatsPanel: NSView {
     func dismiss() {
         timer?.invalidate()
         timer = nil
+        zonesApply("", nil, nil)     // clear any overlays left on a tile
         removeFromSuperview()
+    }
+
+    @objc private func zonesToggled() {
+        UserDefaults.standard.set(motionCheck.state == .on, forKey: "nerdDrawMotion")
+        UserDefaults.standard.set(zonesCheck.state == .on, forKey: "nerdDrawZones")
+        tick()                   // apply/clear immediately, not at the next half-second
     }
 
     // MARK: dragging
@@ -439,6 +488,9 @@ final class NerdStatsPanel: NSView {
         guard let target = targetProvider() else {
             titleField.stringValue = "NERD STATS"
             for id in values.keys { set(id, [Seg(text: "—", color: cDim)]) }
+            motionCheck.isEnabled = false
+            zonesCheck.isEnabled = false
+            zonesApply("", nil, nil)
             return
         }
         let cam = target.camera
@@ -618,6 +670,39 @@ final class NerdStatsPanel: NSView {
             set("wifi", [Seg(text: "no Wi-Fi (wired?)", color: cDim)])
         }
 
+        // motion / intrusion event config (via the NVR) + zone overlay
+        let events = eventsProvider(cam)
+        var motionPolys: [[CGPoint]]?
+        var zonePolys: [[CGPoint]]?
+        switch events {
+        case .noNVR:
+            for id in ["motion", "intrusion"] { set(id, [Seg(text: "no NVR in Settings (⌘,)", color: cDim)]) }
+            motionCheck.isEnabled = false
+            zonesCheck.isEnabled = false
+        case .connecting:
+            for id in ["motion", "intrusion"] { set(id, [Seg(text: "contacting NVR…", color: cDim)]) }
+            motionCheck.isEnabled = false
+            zonesCheck.isEnabled = false
+        case .notRecorded:
+            for id in ["motion", "intrusion"] { set(id, [Seg(text: "not a channel on this NVR", color: cDim)]) }
+            motionCheck.isEnabled = false
+            zonesCheck.isEnabled = false
+        case .ready(let ev):
+            setEventRow("motion", ev.motion, ev.motionSchedule, detail: ev.motionTargets)
+            let zones = ev.intrusionRegions.count
+            var detail: String?
+            if ev.intrusion == .on {
+                detail = zones == 0 ? "no zones" : "\(zones) zone\(zones == 1 ? "" : "s")"
+                if let t = ev.intrusionTargets { detail! += " · \(t)" }
+            }
+            setEventRow("intrusion", ev.intrusion, ev.intrusionSchedule, detail: detail)
+            motionCheck.isEnabled = !ev.motionRegions.isEmpty
+            zonesCheck.isEnabled = zones > 0
+            if motionCheck.state == .on, !ev.motionRegions.isEmpty { motionPolys = ev.motionRegions }
+            if zonesCheck.state == .on, zones > 0 { zonePolys = ev.intrusionRegions }
+        }
+        zonesApply(cam.host, motionPolys, zonePolys)
+
         // clipboard snapshot with the extra detail the panel omits
         lastCopyText = """
         HikViewer nerd stats — \(cam.name) (\(cam.host)) — \(Date())
@@ -634,8 +719,29 @@ final class NerdStatsPanel: NSView {
         late: \(values["late"]?.attributedStringValue.string ?? "")
         cpu: \(values["cpu"]?.attributedStringValue.string ?? "")
         wifi: \(values["wifi"]?.attributedStringValue.string ?? "")
+        motion: \(values["motion"]?.attributedStringValue.string ?? "")
+        intrusion: \(values["intrusion"]?.attributedStringValue.string ?? "")
         totals: \(s.framesTotal) frames · \(s.bytesTotal) bytes · \(s.lateTotal) late
         """
+    }
+
+    /// "on · 24/7 · 2 zones", "off", "…" while loading, "n/a" when the camera
+    /// doesn't support the event or the config couldn't be read.
+    private func setEventRow(_ id: String, _ state: ChannelEvents.State,
+                             _ schedule: String?, detail: String?) {
+        switch state {
+        case .loading:
+            set(id, [Seg(text: "…", color: cDim)])
+        case .unknown:
+            set(id, [Seg(text: "n/a", color: cDim)])
+        case .off:
+            set(id, [Seg(text: "off", color: cDim)])
+        case .on:
+            var segs = [Seg(text: "on", color: cWhite)]
+            segs.append(Seg(text: " · \(schedule ?? "…")", color: cDim))
+            if let detail { segs.append(Seg(text: " · \(detail)", color: cDim)) }
+            set(id, segs)
+        }
     }
 
     private func agoString(_ s: Double) -> String {
