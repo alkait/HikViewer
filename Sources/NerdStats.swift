@@ -373,16 +373,21 @@ final class NerdStatsPanel: NSView {
             configured zone polygons over this camera's video — display only, \
             nothing is written to the camera or NVR.
             """)
+        // Label as a separate text field, not the button's attributedTitle:
+        // built with the release deployment target (macOS 12), a checkbox
+        // created with an empty title never renders a later attributedTitle.
         func makeCheck(_ title: String, key: String, tip: String) -> NSButton {
             let b = NSButton(checkboxWithTitle: "", target: self, action: #selector(zonesToggled))
-            b.attributedTitle = NSAttributedString(
-                string: title,
-                attributes: [.foregroundColor: cDim,
-                             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)])
             b.controlSize = .small
             b.state = UserDefaults.standard.bool(forKey: key) ? .on : .off
+            let l = NSTextField(labelWithString: title)
+            l.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+            l.textColor = cDim
+            let row = NSStackView(views: [b, l])
+            row.spacing = 5
+            row.toolTip = tip
             b.toolTip = tip
-            views.append(b)
+            views.append(row)
             return b
         }
         motionCheck = makeCheck("draw motion areas on video", key: "nerdDrawMotion",
