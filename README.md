@@ -251,8 +251,9 @@ opens that camera's playback right at the event with intrusion bands on the
 timeline — `N`/`Shift-N` then walk the camera's remaining events.
 
 Events you jump to are **marked seen** and dim; unseen ones keep an orange
-dot and the header counts them. `⌫` (or `⌦`) flips the selected row's seen
-mark without watching it — for dismissing the obviously-trivial ones. The
+dot and the header counts them. `Shift-⌫` (or `⌦`, or plain `⌫` with an
+empty filter) flips the selected row's seen mark without watching it — for
+dismissing the obviously-trivial ones, filtered or not. The
 pane reopens on the day, row, and filter you left, so review → watch →
 `Esc` → `Shift-E` continues where you stopped. Seen marks are local UI state
 (`seen-events.json` next to the config; entries older than 90 days are

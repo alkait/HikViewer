@@ -142,7 +142,7 @@ final class EventListPane: NSView {
         scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 20)
         NSLayoutConstraint.activate([scrollWidth, scrollHeight])
 
-        let hint = NSTextField(labelWithString: "↵ open · ⌫ seen · ←→ day · ⇧T today · type to filter (-x, -\"a b\" exclude) · esc")
+        let hint = NSTextField(labelWithString: "↵ open · ⇧⌫ seen · ←→ day · ⇧T today · type to filter (-x, -\"a b\" exclude) · esc")
         hint.font = .systemFont(ofSize: 10)
         hint.textColor = NSColor(white: 0.55, alpha: 1)
 
@@ -425,6 +425,10 @@ final class EventListPane: NSView {
             return
         }
         if event.keyCode == 51 {                        // ⌫: filter editing wins
+            if event.modifierFlags.contains(.shift) {   // ⇧⌫ toggles seen even mid-filter
+                toggleSeen()
+                return
+            }
             if !filter.isEmpty {
                 filter.removeLast()
                 selIndex = nil
