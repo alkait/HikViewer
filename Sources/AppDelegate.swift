@@ -30,6 +30,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var nvrPreparing = false
     private var bookmarkPrompt: BookmarkNamePrompt?
     private var bookmarkPane: BookmarkListPane?
+    /// Centralized intrusion review (Shift-E). The pane reopens on the day
+    /// and row it was closed on, so the review loop — open, jump, watch,
+    /// Esc, reopen — continues where it left off.
+    private var eventPane: EventListPane?
+    private var eventPaneDay: Date?
+    private var eventPaneKey: String?
+    private var eventPaneFilter = ""
     /// In-flight clip recording (R); at most one, tied to the camera it
     /// started on — leaving that camera stops it.
     private var recorder: ClipRecorder?
@@ -179,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         closeSelector()
         closeHelp()
         closeBookmarkUI()
+        closeEventPane()
         supp.teardown()
         promotedOrigin = nil
         nvrClient = nil      // pick up NVR credential changes lazily
@@ -350,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
         closeBookmarkUI()
+        closeEventPane()
         // Panes survive playback exits on the same camera; any other focus
         // change tears them down (their layout is saved for restore).
         if supp.attachedHost != host { supp.teardown() }
@@ -452,6 +461,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // playback block so plain B stays "add bookmark" there.
         if e.charactersIgnoringModifiers?.lowercased() == "b", e.modifierFlags.contains(.shift) {
             toggleBookmarkPane()
+            return true
+        }
+        // Shift-E: the intrusion event pane, from any context. Checked before
+        // the playback block so plain E stays the band selector there.
+        if e.charactersIgnoringModifiers?.lowercased() == "e", e.modifierFlags.contains(.shift) {
+            toggleEventPane()
             return true
         }
         // + on a focused view: add a supplementary pane (selector panel).
@@ -783,6 +798,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         programmaticNav = false
         SessionStore.update { $0.location = .camera; $0.cameraHost = b.host }
         enterPlayback(startAt: b.time)
+    }
+
+    // MARK: intrusion review (Shift-E lists a day's events, all cameras)
+
+    private func toggleEventPane() {
+        if eventPane != nil { closeEventPane(); return }
+        guard bookmarkPrompt == nil else { return }
+        closeHelp()
+        closeBookmarkUI()
+        let pane = EventListPane()
+        pane.onClose = { [weak self] in self?.closeEventPane() }
+        pane.onPick = { [weak self] row in self?.jumpToEvent(row) }
+        // One eventLog crawl covers every channel — the same (cached) crawl
+        // the playback timeline uses, so pane and timeline never duplicate
+        // work. Unmatched channels still show (as "channel N") rather than
+        // silently vanishing.
+        pane.loadDay = { [weak self] from, to, deliver in
+            guard let self, let client = self.nvrClient else { deliver([]); return }
+            client.eventLog(from: from, to: to) { _, intrusion in
+                var byChannel: [Int: (name: String, host: String)] = [:]
+                for (host, ch) in client.channelByHost {
+                    byChannel[ch] = (Settings.cameras.first { $0.host == host }?.name ?? host, host)
+                }
+                deliver(intrusion.flatMap { ch, spans in
+                    spans.map { EventListPane.Row(cameraName: byChannel[ch]?.name ?? "channel \(ch)",
+                                                  host: byChannel[ch]?.host, channel: ch,
+                                                  start: $0.start, end: $0.end) }
+                })
+            }
+        }
+        pane.frame = grid.bounds
+        pane.autoresizingMask = [.width, .height]
+        grid.addSubview(pane)
+        eventPane = pane
+        window.makeFirstResponder(pane)
+
+        guard let nvr = Settings.nvr, !nvr.host.isEmpty else {
+            pane.fail("no NVR in Settings (⌘,)")
+            return
+        }
+        if nvrClient == nil { nvrClient = NVRClient(nvr: nvr) }
+        guard let client = nvrClient else { return }
+        client.prepare { [weak self, weak pane] ok in
+            guard let self, let pane, pane === self.eventPane else { return }
+            guard ok else { pane.fail("NVR unreachable"); return }
+            pane.ready(timeZone: client.timeZone, openAt: self.eventPaneDay,
+                       selectKey: self.eventPaneKey, filter: self.eventPaneFilter)
+        }
+    }
+
+    private func closeEventPane() {
+        guard let pane = eventPane else { return }
+        eventPaneDay = pane.day
+        eventPaneKey = pane.selectedKey
+        eventPaneFilter = pane.filter
+        pane.removeFromSuperview()
+        eventPane = nil
+        window.makeFirstResponder(grid)
+    }
+
+    /// Open the event's camera in playback at the event start with the
+    /// intrusion band up, so N/Shift-N continue through that camera's events.
+    /// Same programmatic navigation as jumpToBookmark; jumping marks it seen.
+    private func jumpToEvent(_ row: EventListPane.Row) {
+        SeenEventStore.markSeen(row.key)
+        closeEventPane()
+        guard let host = row.host,
+              let target = streams.firstIndex(where: { $0.camera.host == host }) else {
+            flashHUD("Camera not configured in HikViewer")
+            return
+        }
+        // A fresh playback reads the band from this key in begin(); an
+        // already-open one switches directly.
+        UserDefaults.standard.set(PlaybackEventBand.intrusion.rawValue,
+                                  forKey: PlaybackController.eventBandDefaultsKey)
+        if grid.focused == target {
+            if let pb = playback {
+                pb.setEventBand(.intrusion)
+                pb.seek(to: row.start)
+            } else {
+                enterPlayback(startAt: row.start)
+            }
+            return
+        }
+        promotedOrigin = nil
+        programmaticNav = true
+        grid.focused = target
+        programmaticNav = false
+        SessionStore.update { $0.location = .camera; $0.cameraHost = host }
+        enterPlayback(startAt: row.start)
     }
 
     // MARK: snapshots & clips (S / R, saved to the Desktop and opened)

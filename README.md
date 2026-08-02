@@ -238,6 +238,28 @@ running underneath, so `Esc` back to live is instant.
   camera is plugged into and matches it to your camera list; a camera the NVR
   doesn't record shows "not recorded on this NVR".
 
+### Intrusion review (`Shift-E`)
+
+Press `Shift-E` anywhere for one list of a day's **intrusion events across
+every camera** — no more visiting each camera to check. Rows are newest
+first: camera, start time, duration. `↑`/`↓` move, type to filter by camera
+name (space-separated terms all must match; prefix one with `-` to exclude
+it, and quote a phrase to match it exactly — `-outside`, `"front door"`,
+`-"outside right"`), `←`/`→` step days (`Shift-T` jumps to today),
+`Return` (or a click)
+opens that camera's playback right at the event with intrusion bands on the
+timeline — `N`/`Shift-N` then walk the camera's remaining events.
+
+Events you jump to are **marked seen** and dim; unseen ones keep an orange
+dot and the header counts them. `⌫` (or `⌦`) flips the selected row's seen
+mark without watching it — for dismissing the obviously-trivial ones. The
+pane reopens on the day, row, and filter you left, so review → watch →
+`Esc` → `Shift-E` continues where you stopped. Seen marks are local UI state
+(`seen-events.json` next to the config; entries older than 90 days are
+pruned), and the event data comes from the same per-day cached alarm-log
+crawl the playback timeline uses — opening the pane costs nothing extra
+once either has loaded the day.
+
 ## Config file
 
 Everything (cameras + NVR + passwords) lives in a single JSON file at

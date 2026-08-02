@@ -24,6 +24,7 @@ enum HelpContext {
             ("hold+drag", "reorder the grid"),
             ("I", "nerd stats (selected tile)"),
             ("⇧B", "bookmarks"),
+            ("⇧E", "intrusion events"),
             ("⌘,", "settings"),
             ("Esc", "cancel selection / reorder"),
         ]
@@ -35,6 +36,7 @@ enum HelpContext {
             ("R", "record clip → Desktop"),
             ("I", "nerd stats"),
             ("⇧B", "bookmarks"),
+            ("⇧E", "intrusion events"),
             ("pinch", "zoom · scroll or drag pans"),
             ("2×click pane", "open that camera"),
             ("Esc", "zoom out · back · grid"),
@@ -46,6 +48,7 @@ enum HelpContext {
             ("X", "speed 1× → 2× → 4×"),
             ("N / ⇧N", "next / previous event"),
             ("E", "event bands · motion / intrusion"),
+            ("⇧E", "intrusion events · all cameras"),
             ("C", "calendar · arrows + ↵ pick a day"),
             ("T", "jump to today"),
             ("S", "snapshot at this position"),

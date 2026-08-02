@@ -108,7 +108,7 @@ final class PlaybackController {
         let savedFilter = UserDefaults.standard.stringArray(forKey: filterDefaultsKey) ?? ["human", "vehicle"]
         humanFilter = savedFilter.contains("human")
         vehicleFilter = savedFilter.contains("vehicle")
-        eventBand = UserDefaults.standard.string(forKey: eventBandDefaultsKey)
+        eventBand = UserDefaults.standard.string(forKey: Self.eventBandDefaultsKey)
             .flatMap(PlaybackEventBand.init(rawValue:)) ?? .motion
 
         day = cal.startOfDay(for: start)
@@ -345,7 +345,8 @@ final class PlaybackController {
     // MARK: event highlights (E selector: none / motion / intrusion)
 
     private let filterDefaultsKey = "motionFilter"
-    private let eventBandDefaultsKey = "playbackEventBand"
+    /// Static so the Shift-E pane can pre-select intrusion before a jump.
+    static let eventBandDefaultsKey = "playbackEventBand"
 
     private func setEventSpans(_ spans: [RecordingSegment]) {
         eventSpans = spans
@@ -441,13 +442,19 @@ final class PlaybackController {
         return sel
     }
 
+    /// Programmatic band switch — the Shift-E pane jumps here with the
+    /// intrusion band up; the current motion filters are kept as-is.
+    func setEventBand(_ band: PlaybackEventBand) {
+        applyEventSelection(band: band, human: humanFilter, vehicle: vehicleFilter)
+    }
+
     private func applyEventSelection(band: PlaybackEventBand, human: Bool, vehicle: Bool) {
         let filterChanged = human != humanFilter || vehicle != vehicleFilter
         let bandChanged = band != eventBand
         eventBand = band
         humanFilter = human
         vehicleFilter = vehicle
-        UserDefaults.standard.set(band.rawValue, forKey: eventBandDefaultsKey)
+        UserDefaults.standard.set(band.rawValue, forKey: Self.eventBandDefaultsKey)
         var saved: [String] = []
         if human { saved.append("human") }
         if vehicle { saved.append("vehicle") }
