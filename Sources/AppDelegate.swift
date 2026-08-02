@@ -256,6 +256,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         streams.forEach { $0.start() }
         // The rebuilt tiles were added above the panel — put it back on top.
         if let p = nerdStats { grid.addSubview(p, positioned: .above, relativeTo: nil) }
+        warmEventLog()
+    }
+
+    /// Warm today's (and yesterday's) all-channel event log in the background
+    /// as soon as the app has an NVR: the Shift-E pane's first open and the
+    /// playback timeline then start from cache instead of a cold multi-second
+    /// crawl. Failures are silent — the pane's own ladder reports problems.
+    private func warmEventLog() {
+        guard let nvr = Settings.nvr, !nvr.host.isEmpty else { return }
+        if nvrClient == nil { nvrClient = NVRClient(nvr: nvr) }
+        guard let client = nvrClient else { return }
+        client.prepare { ok in
+            guard ok else { return }
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = client.timeZone
+            let today = cal.startOfDay(for: Date())
+            for dayStart in [today, cal.date(byAdding: .day, value: -1, to: today)].compactMap({ $0 }) {
+                guard let end = cal.date(byAdding: .day, value: 1, to: dayStart) else { continue }
+                client.eventLog(from: dayStart, to: end) { _, _ in }
+            }
+        }
     }
 
     // MARK: nerd stats (I)

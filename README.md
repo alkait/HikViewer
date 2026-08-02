@@ -258,8 +258,9 @@ pane reopens on the day, row, and filter you left, so review → watch →
 `Esc` → `Shift-E` continues where you stopped. Seen marks are local UI state
 (`seen-events.json` next to the config; entries older than 90 days are
 pruned), and the event data comes from the same per-day cached alarm-log
-crawl the playback timeline uses — opening the pane costs nothing extra
-once either has loaded the day.
+crawl the playback timeline uses — the app warms today's (and yesterday's)
+crawl at launch and prefetches the days adjacent to the one shown, so the
+pane opens and steps without waiting.
 
 ## Config file
 

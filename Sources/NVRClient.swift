@@ -132,6 +132,32 @@ final class NVRClient {
                                             _ intrusion: [Int: [RecordingSegment]]) -> Void]] = [:]
     private var targetCache: [String: (stamp: Date, spans: [RecordingSegment])] = [:]
 
+    // The NVR's log search runs ONE server-side session: each crawl re-sends
+    // its searchID to page that session, so two concurrent crawls (e.g. the
+    // launch warm-up covering today + yesterday) interleave searchIDs, keep
+    // resetting each other's session, and can wedge into pagination that
+    // never terminates — callers then hang on "loading" forever. Serialize:
+    // one crawl at a time, the rest wait their turn. Main thread only.
+    private var crawlWaiting: [() -> Void] = []
+    private var crawlRunning = false
+
+    private func enqueueCrawl(_ start: @escaping () -> Void) {
+        crawlWaiting.append(start)
+        startNextCrawl()
+    }
+
+    private func startNextCrawl() {
+        guard !crawlRunning, !crawlWaiting.isEmpty else { return }
+        crawlRunning = true
+        crawlWaiting.removeFirst()()
+    }
+
+    /// A crawl finished (delivered its completions) — release the slot.
+    private func crawlDone() {
+        crawlRunning = false
+        startNextCrawl()
+    }
+
     /// Past days never change; today's entries go stale as new events land.
     private func cacheValid(_ stamp: Date, windowEnd: Date) -> Bool {
         windowEnd < Date() || Date().timeIntervalSince(stamp) < 60
@@ -172,6 +198,7 @@ final class NVRClient {
                 for cb in self.eventLogPending.removeValue(forKey: key) ?? [] {
                     cb(motion, intrusion)
                 }
+                self.crawlDone()
             }
         }
 
@@ -194,6 +221,10 @@ final class NVRClient {
             var sessionCount = 0
             var lastTime = cursor
             func page(_ position: Int) {
+                // Termination backstop: no sane day has this many log entries;
+                // beyond it assume the NVR is stuck answering MORE and bail
+                // with what we have rather than paging forever.
+                guard position < 50_000 else { finish(); return }
                 guard let u = URL(string: "http://\(nvr.host)/ISAPI/ContentMgmt/logSearch") else { finish(); return }
                 var req = URLRequest(url: u)
                 req.httpMethod = "POST"
@@ -248,7 +279,7 @@ final class NVRClient {
             }
             page(0)
         }
-        search(cursor: from, restartsLeft: 16)
+        enqueueCrawl { search(cursor: from, restartsLeft: 16) }
     }
 
     static func pairMotionEvents(_ events: [(channel: Int, isStart: Bool, time: Date)],
